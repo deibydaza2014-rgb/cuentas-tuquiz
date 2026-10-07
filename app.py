@@ -3419,13 +3419,7 @@ with tab_auditoria:
                         df_p.at[r_idx, "Neto a Pagar"] = round(nueva_base + nuevo_iva - nueva_rfte - nuevo_rica - float(fac_sel.get("ReteIVA", 0.0)), 2)
 
                     st.session_state["df_procesado"] = df_p
-                    # Actualizar asiento contable de triangulación para que refleje de inmediato la ReteFuente
-                    fac_fn_act = str(df_p.at[r_idx, "Factura"]).strip()
-                    if "asientos_triangulacion_por_factura" in st.session_state:
-                        asientos_m = st.session_state["asientos_triangulacion_por_factura"]
-                        if fac_fn_act in asientos_m:
-                            asientos_m[fac_fn_act] = obtener_asiento_contable_hoja2(df_p.loc[r_idx], es_aduanero=es_aduanero)
-                            st.session_state["asientos_triangulacion_por_factura"] = asientos_m
+# Asiento de triangulación protegido: no se sobreescribe con asiento estándar
 
                     # Guardar regla en la Memoria de Aprendizaje Continuo
                     guardar_regla_aprendizaje(
@@ -3560,24 +3554,56 @@ with tab_auditoria:
         st.caption("Detalle de partida doble con imputación de cuentas, débitos, créditos y sumas iguales:")
 
         fac_num_aud = str(fac_sel["Factura"]).strip()
-        asientos_map = st.session_state.get("asientos_triangulacion_por_factura", {})
-        asiento_triang_aprobado = asientos_map.get(fac_num_aud)
-        if asiento_triang_aprobado is None:
-            asiento_triang_aprobado = st.session_state.get(f"asiento_triang_aprobado_{fac_num_aud}")
+        asiento_triang_aprobado = None
 
-        # Si aún no está en el mapa, verificar si pertenece a algún paquete listo en triangulación
-        if asiento_triang_aprobado is None and "paquetes_importacion" in st.session_state:
+        # 1. Buscar si esta factura corresponde al agente de algún paquete en triangulación
+        if "paquetes_importacion" in st.session_state:
             for p_k, p_v in st.session_state["paquetes_importacion"].items():
                 if str(p_v["agente"]["Factura"]).strip() == fac_num_aud:
-                    if st.session_state.get(f"paquete_listo_{p_k}", False) or p_v.get("diferencia", 999) < 1.0:
+                    # Si el paquete está validado en Pestaña 3, usar su asiento exacto aprobado
+                    if st.session_state.get(f"paquete_listo_{p_k}", False):
+                        if f"asiento_fijo_pq_{p_k}" in st.session_state and st.session_state[f"asiento_fijo_pq_{p_k}"] is not None:
+                            asiento_triang_aprobado = st.session_state[f"asiento_fijo_pq_{p_k}"].copy()
+                        elif "asiento_fijo" in p_v and p_v["asiento_fijo"] is not None:
+                            asiento_triang_aprobado = p_v["asiento_fijo"].copy()
+                        elif "asiento_aprobado" in p_v and p_v["asiento_aprobado"] is not None:
+                            asiento_triang_aprobado = p_v["asiento_aprobado"].copy()
+                    
+                    if asiento_triang_aprobado is None:
+                        asientos_m = st.session_state.get("asientos_triangulacion_por_factura", {})
+                        if fac_num_aud in asientos_m and asientos_m[fac_num_aud] is not None:
+                            asiento_triang_aprobado = asientos_m[fac_num_aud].copy()
+
+                    if asiento_triang_aprobado is None and (st.session_state.get(f"paquete_listo_{p_k}", False) or p_v.get("diferencia", 999) < 1.0):
                         en_nd_k = st.session_state.get(f"enviar_nd_pq_{p_k}", False)
                         en_gp_k = st.session_state.get(f"enviar_gp_pq_{p_k}", False)
                         en_h2_k = st.session_state.get(f"enviar_h2_pq_{p_k}", False)
-                        df_as_k, _, _ = generar_asiento_triangulacion_paquete(p_v["agente"], p_v["terceros"], enviar_a_no_deducible=en_nd_k, enviar_a_gastos_propios=en_gp_k, enviar_a_hoja2=en_h2_k)
+                        if en_h2_k:
+                            df_as_k = obtener_asiento_contable_hoja2(p_v["agente"], es_aduanero=False)
+                        elif en_gp_k:
+                            df_as_k, _, _ = generar_asiento_triangulacion_paquete(p_v["agente"], p_v["terceros"], enviar_a_no_deducible=False)
+                            asiento_gp_filas = []
+                            for _, r_as in df_as_k.iterrows():
+                                if str(r_as["Código Cuenta"]).strip() == CUENTA_NO_DEDUCIBLE:
+                                    asiento_gp_filas.append({
+                                        "Código Cuenta": CUENTA_IMPORTACION_TRANSITO,
+                                        "Descripción Cuenta": f"Mercancías en Tránsito / Base Propia Agente (Fac {p_v['agente'].get('Factura', '')})",
+                                        "Tercero / NIT": f"{p_v['agente'].get('NIT Emisor', '')} - {p_v['agente'].get('Proveedor', '')[:25]}",
+                                        "Débito ($)": float(r_as["Débito ($)"]),
+                                        "Crédito ($)": 0.0
+                                    })
+                                else:
+                                    asiento_gp_filas.append(r_as.to_dict())
+                            df_as_k = pd.DataFrame(asiento_gp_filas)
+                        else:
+                            df_as_k, _, _ = generar_asiento_triangulacion_paquete(p_v["agente"], p_v["terceros"], enviar_a_no_deducible=en_nd_k)
                         asiento_triang_aprobado = df_as_k
-                        asientos_map[fac_num_aud] = df_as_k
-                        st.session_state["asientos_triangulacion_por_factura"] = asientos_map
-                        break
+                    break
+
+        if asiento_triang_aprobado is None:
+            asientos_m = st.session_state.get("asientos_triangulacion_por_factura", {})
+            if fac_num_aud in asientos_m and asientos_m[fac_num_aud] is not None:
+                asiento_triang_aprobado = asientos_m[fac_num_aud].copy()
 
         if asiento_triang_aprobado is not None and not (isinstance(asiento_triang_aprobado, pd.DataFrame) and asiento_triang_aprobado.empty):
             df_asiento = pd.DataFrame(asiento_triang_aprobado).copy()
@@ -4047,26 +4073,34 @@ with tab_triangulacion:
 
             pqs_actuales = st.session_state["paquetes_importacion"]
 
-            # Barra de Acciones y Selección de Paquete
+            # Barra de Acciones y Selección de Paquete (Persistente: no salta al paquete 1)
             c_top_pq1, c_top_pq2 = st.columns([2.5, 1])
             with c_top_pq1:
-                lista_pqs_titulos = []
-                for p_num, p_data in pqs_actuales.items():
+                pqs_keys = list(pqs_actuales.keys())
+                if "paquete_seleccionado_id" not in st.session_state or st.session_state["paquete_seleccionado_id"] not in pqs_keys:
+                    st.session_state["paquete_seleccionado_id"] = pqs_keys[0] if pqs_keys else 1
+
+                mapa_pqs_titulos = {}
+                for p_num in pqs_keys:
+                    p_data = pqs_actuales[p_num]
                     ag_t = p_data["agente"]
                     n_terc = len(p_data["terceros"])
                     s_terc = sum([float(r.get("Total Neto", 0.0) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0)))) for _, r in p_data["terceros"].iterrows()])
                     es_val_p = st.session_state.get(f"paquete_listo_{p_num}", False)
                     lock_icon = "🔒 [VALIDADO] " if es_val_p else ""
-                    tag_pq = f"{lock_icon}📦 Paquete #{p_num}: {ag_t['Proveedor'][:16]} ({ag_t['Factura']}) — Cobro: ${ag_t['Total']:,.0f} | {n_terc} Facturas Terceros (${s_terc:,.0f})"
-                    lista_pqs_titulos.append(tag_pq)
-                    
-                sel_pq_idx = st.selectbox(
+                    mapa_pqs_titulos[p_num] = f"{lock_icon}📦 Paquete #{p_num}: {ag_t['Proveedor'][:16]} ({ag_t['Factura']}) — Cobro: ${ag_t['Total']:,.0f} | {n_terc} Facturas Terceros (${s_terc:,.0f})"
+
+                idx_actual_sel = pqs_keys.index(st.session_state["paquete_seleccionado_id"]) if st.session_state["paquete_seleccionado_id"] in pqs_keys else 0
+
+                pq_id_sel = st.selectbox(
                     "📦 Selecciona el Paquete de Importación que deseas revisar:",
-                    range(len(lista_pqs_titulos)),
-                    format_func=lambda i: lista_pqs_titulos[i],
-                    key="sel_paquete_importacion_activo"
+                    options=pqs_keys,
+                    index=idx_actual_sel,
+                    format_func=lambda pid: mapa_pqs_titulos.get(pid, f"Paquete #{pid}"),
+                    key="sb_paquete_activo_widget"
                 )
-                pq_id_sel = sel_pq_idx + 1
+                st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                st.session_state["sel_paquete_activo_key"] = pq_id_sel
                 paquete_activo = pqs_actuales[pq_id_sel]
                 agente_actual = paquete_activo["agente"]
                 terceros_actual = paquete_activo["terceros"]
@@ -4115,6 +4149,9 @@ with tab_triangulacion:
                         st.session_state["asientos_triangulacion_por_factura"] = {}
                     ag_fac_str = str(agente_actual["Factura"]).strip()
                     st.session_state["asientos_triangulacion_por_factura"][ag_fac_str] = df_asiento_paquete.copy()
+                    st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                    st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
 
                     # Traslado y actualización inmediata a df_procesado (Página 2)
                     if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
@@ -4146,6 +4183,9 @@ with tab_triangulacion:
                     ag_fac_str = str(agente_actual["Factura"]).strip()
                     if "asientos_triangulacion_por_factura" in st.session_state:
                         st.session_state["asientos_triangulacion_por_factura"].pop(ag_fac_str, None)
+                    st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                    st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
                     if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
                         df_pr = st.session_state["df_procesado"]
                         idx_ag = df_pr[df_pr["Factura"].astype(str).str.strip() == ag_fac_str].index
@@ -4337,7 +4377,11 @@ with tab_triangulacion:
                                     st.success(f"¡Factura {fac_nom_mover} retirada de importaciones y enviada a Compras Directas Ordinarias (Pestaña 1 y 4)!")
                                 else:
                                     st.success(f"¡Factura {fac_nom_mover} retirada del Paquete #{pq_id_sel} y devuelta a facturas libres!")
-                                    
+                                
+                                st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                                st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                                st.session_state["sb_paquete_activo_widget"] = pq_id_sel
+                                guardar_estado_manual(empresa)
                                 st.rerun()
                 else:
                     st.info("Este paquete no tiene facturas asignadas para retirar.")
@@ -4381,6 +4425,10 @@ with tab_triangulacion:
                         fila_agregada = mapa_agregar[sel_para_agregar]
                         terceros_nuevo = pd.concat([terceros_actual, pd.DataFrame([fila_agregada])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
                         st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_nuevo
+                        st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                        st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                        st.session_state["sb_paquete_activo_widget"] = pq_id_sel
+                        guardar_estado_manual(empresa)
                         st.success(f"¡Factura {fila_agregada['Factura']} añadida al Paquete #{pq_id_sel}!")
                         st.rerun()
 
@@ -4408,7 +4456,16 @@ with tab_triangulacion:
                     st.session_state[f"enviar_h2_pq_{pq_id_sel}"] = True
                     st.session_state[f"enviar_gp_pq_{pq_id_sel}"] = False
                     st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
+                    st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
+                    df_as_act = obtener_asiento_contable_hoja2(agente_actual, es_aduanero=False)
+                    if st.session_state.get(f"paquete_listo_{pq_id_sel}", False):
+                        st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_as_act.copy()
+                        paquete_activo["asiento_fijo"] = df_as_act.copy()
+                        ag_fac_str = str(agente_actual["Factura"]).strip()
+                        st.session_state.setdefault("asientos_triangulacion_por_factura", {})[ag_fac_str] = df_as_act.copy()
+                        guardar_estado_manual(empresa)
                     st.success("¡Contabilización de la Página 2 aplicada a este paquete!")
                     st.rerun()
 
@@ -4420,7 +4477,29 @@ with tab_triangulacion:
                     st.session_state[f"enviar_gp_pq_{pq_id_sel}"] = True
                     st.session_state[f"enviar_h2_pq_{pq_id_sel}"] = False
                     st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
+                    st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
+                    df_as_act, _, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
+                    asiento_gp_filas = []
+                    for _, r_as in df_as_act.iterrows():
+                        if str(r_as["Código Cuenta"]).strip() == CUENTA_NO_DEDUCIBLE:
+                            asiento_gp_filas.append({
+                                "Código Cuenta": CUENTA_IMPORTACION_TRANSITO,
+                                "Descripción Cuenta": f"Mercancías en Tránsito / Base Propia Agente (Fac {agente_actual.get('Factura', '')})",
+                                "Tercero / NIT": f"{agente_actual.get('NIT Emisor', '')} - {agente_actual.get('Proveedor', '')[:25]}",
+                                "Débito ($)": float(r_as["Débito ($)"]),
+                                "Crédito ($)": 0.0
+                            })
+                        else:
+                            asiento_gp_filas.append(r_as.to_dict())
+                    df_as_act = pd.DataFrame(asiento_gp_filas)
+                    if st.session_state.get(f"paquete_listo_{pq_id_sel}", False):
+                        st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_as_act.copy()
+                        paquete_activo["asiento_fijo"] = df_as_act.copy()
+                        ag_fac_str = str(agente_actual["Factura"]).strip()
+                        st.session_state.setdefault("asientos_triangulacion_por_factura", {})[ag_fac_str] = df_as_act.copy()
+                        guardar_estado_manual(empresa)
                     st.success("¡Faltante asignado a Mercancías en Tránsito (14650501)!")
                     st.rerun()
 
@@ -4431,7 +4510,16 @@ with tab_triangulacion:
                     st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = True
                     st.session_state[f"enviar_gp_pq_{pq_id_sel}"] = False
                     st.session_state[f"enviar_h2_pq_{pq_id_sel}"] = False
+                    st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
+                    df_as_act, _, _ = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=True)
+                    if st.session_state.get(f"paquete_listo_{pq_id_sel}", False):
+                        st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_as_act.copy()
+                        paquete_activo["asiento_fijo"] = df_as_act.copy()
+                        ag_fac_str = str(agente_actual["Factura"]).strip()
+                        st.session_state.setdefault("asientos_triangulacion_por_factura", {})[ag_fac_str] = df_as_act.copy()
+                        guardar_estado_manual(empresa)
                     st.success("¡Faltante enviado a Gastos No Deducibles (53950501)!")
                     st.rerun()
 
