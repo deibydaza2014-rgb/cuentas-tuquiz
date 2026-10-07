@@ -3839,6 +3839,17 @@ with tab_triangulacion:
                 pool_t["_dt"] = pd.to_datetime(pool_t["Fecha"], dayfirst=True, errors="coerce")
                 pool_t = pool_t.sort_values(by="_dt", ascending=True)
                 pool_t["_asignado_pq"] = 0
+
+                # PROTEGER Y BLOQUEAR FACTURAS DE PAQUETES YA VALIDADOS
+                if "paquetes_importacion" in st.session_state:
+                    for p_num_prev, p_data_prev in st.session_state["paquetes_importacion"].items():
+                        if st.session_state.get(f"paquete_listo_{p_num_prev}", False):
+                            df_t_prev = p_data_prev.get("terceros")
+                            if df_t_prev is not None and not df_t_prev.empty:
+                                for f_b in df_t_prev["Factura"].dropna():
+                                    idx_match = pool_t[pool_t["Factura"].astype(str).str.strip() == str(f_b).strip()].index
+                                    if not idx_match.empty:
+                                        pool_t.loc[idx_match, "_asignado_pq"] = p_num_prev
                 
                 for idx_ag_i, (_, ag_i) in enumerate(df_ag_ord.iterrows()):
                     pq_id_i = idx_ag_i + 1
@@ -3997,7 +4008,9 @@ with tab_triangulacion:
                     ag_t = p_data["agente"]
                     n_terc = len(p_data["terceros"])
                     s_terc = sum([float(r.get("Total Neto", 0.0) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0)))) for _, r in p_data["terceros"].iterrows()])
-                    tag_pq = f"📦 Paquete #{p_num}: {ag_t['Proveedor'][:16]} ({ag_t['Factura']}) — Cobro: ${ag_t['Total']:,.0f} | {n_terc} Facturas Terceros (${s_terc:,.0f})"
+                    es_val_p = st.session_state.get(f"paquete_listo_{p_num}", False)
+                    lock_icon = "🔒 [VALIDADO] " if es_val_p else ""
+                    tag_pq = f"{lock_icon}📦 Paquete #{p_num}: {ag_t['Proveedor'][:16]} ({ag_t['Factura']}) — Cobro: ${ag_t['Total']:,.0f} | {n_terc} Facturas Terceros (${s_terc:,.0f})"
                     lista_pqs_titulos.append(tag_pq)
                     
                 sel_pq_idx = st.selectbox(
@@ -4037,6 +4050,25 @@ with tab_triangulacion:
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
+
+                es_val_card = st.session_state.get(f"paquete_listo_{pq_id_sel}", False)
+                if not es_val_card:
+                    st.info(f"ℹ️ Cuando este paquete esté cuadrado, valídalo para bloquear sus facturas y que pase a Siigo.")
+                    if st.button(f"🔒 Validar Paquete #{pq_id_sel}", key=f"btn_val_card_{pq_id_sel}", type="primary", use_container_width=True):
+                        st.session_state[f"paquete_listo_{pq_id_sel}"] = True
+                        st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                        guardar_estado_manual(empresa)
+                        st.success(f"🔒 ¡Paquete #{pq_id_sel} validado y bloqueado!")
+                        st.rerun()
+                else:
+                    st.success(f"🔒 **Paquete #{pq_id_sel} VALIDADO Y BLOQUEADO**")
+                    if st.button(f"🔓 Desbloquear Paquete #{pq_id_sel}", key=f"btn_desb_card_{pq_id_sel}", use_container_width=True):
+                        st.session_state[f"paquete_listo_{pq_id_sel}"] = False
+                        st.session_state.pop(f"asiento_fijo_pq_{pq_id_sel}", None)
+                        paquete_activo.pop("asiento_fijo", None)
+                        st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                        guardar_estado_manual(empresa)
+                        st.rerun()
 
             with col_pq2:
                 st.markdown(f"##### Facturas de Terceros que Componen este Paquete #{pq_id_sel}:")
@@ -4188,9 +4220,19 @@ with tab_triangulacion:
                 mapa_agregar = {}
                 cands_disp_agregar = df_terceros_all.copy()
                 
+                # RESTRICCIÓN DE BLOQUEO: Las facturas de paquetes ya validados no se pueden añadir a otros
+                facturas_bloqueadas_validadas = set()
+                if "paquetes_importacion" in st.session_state:
+                    for p_k_v, p_dat_v in st.session_state["paquetes_importacion"].items():
+                        if st.session_state.get(f"paquete_listo_{p_k_v}", False):
+                            df_t_val = p_dat_v.get("terceros")
+                            if df_t_val is not None and not df_t_val.empty:
+                                for f_asig in df_t_val["Factura"].dropna():
+                                    facturas_bloqueadas_validadas.add(str(f_asig).strip())
+
                 for _, tr_cand in cands_disp_agregar.iterrows():
-                    f_cand_num = tr_cand["Factura"]
-                    if f_cand_num not in facs_en_este:
+                    f_cand_num = str(tr_cand["Factura"]).strip()
+                    if f_cand_num not in facs_en_este and f_cand_num not in facturas_bloqueadas_validadas:
                         es_reg_c = bool(tr_cand.get("Ya Registrada", False))
                         tag_est = f"🔴 Registrada ({tr_cand.get('Comprobante Previo', '10-Prev')})" if es_reg_c else "⚪ No Contabilizada (Pendiente)"
                         sc_cand = float(tr_cand.get("Total Neto", 0.0)) or (float(tr_cand.get("Base", 0.0)) + float(tr_cand.get("IVA", 0.0)))
@@ -4211,34 +4253,85 @@ with tab_triangulacion:
                         st.success(f"¡Factura {fila_agregada['Factura']} añadida al Paquete #{pq_id_sel}!")
                         st.rerun()
 
-            # 3. VERIFICACIÓN DE FALTANTE Y BOTÓN DE ENVÍO A NO DEDUCIBLE
-            enviar_nd_activo = st.session_state.get(f"enviar_nd_pq_{pq_id_sel}", False)
-            
-            # Pre-cálculo para conocer si falta dinero
-            df_prev, dif_faltante_prev, ret_prev = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
-            
-            if dif_faltante_prev > 0.05:
-                if not enviar_nd_activo:
-                    st.warning(f"⚠️ **Faltan ${dif_faltante_prev:,.2f}** para completar el cobro del Agente ({agente_actual['Proveedor']} por ${tot_agente_actual:,.2f}). Faltan facturas de terceros (DHL, Cargo Aduana o Garaje) por aparecer o vincular.")
-                    c_btn_nd1, c_btn_nd2 = st.columns([2.2, 1.2])
-                    with c_btn_nd1:
-                        st.caption("💡 Si ya no queda de otra porque el agente no entregó soporte o no hay más facturas, presiona el botón para cerrar el cruce mandando la diferencia a No Deducibles:")
-                    with c_btn_nd2:
-                        if st.button(f"🔴 Enviar Faltante (${dif_faltante_prev:,.2f}) a No Deducibles (53950501)", key=f"btn_mandar_nd_{pq_id_sel}"):
-                            st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = True
-                            st.success(f"¡Faltante de ${dif_faltante_prev:,.2f} enviado a la cuenta 53950501!")
-                            st.rerun()
-                else:
-                    c_msg_nd1, c_msg_nd2 = st.columns([2.5, 1])
-                    with c_msg_nd1:
-                        st.info(f"ℹ️ **Cruce Cerrado con No Deducibles:** Se enviaron **${dif_faltante_prev:,.2f}** a la cuenta `53950501` (Gastos No Deducibles) al no existir soporte DIAN.")
-                    with c_msg_nd2:
-                        if st.button("↩️ Deshacer envío a No Deducibles", key=f"btn_undo_nd_{pq_id_sel}"):
-                            st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
-                            st.rerun()
+            # 3. TRATAMIENTO CONTABLE: PÁGINA 2 / MERCANCÍAS EN TRÁNSITO / NO DEDUCIBLES
+            enviar_h2_activo = bool(st.session_state.get(f"enviar_h2_pq_{pq_id_sel}", False))
+            enviar_gp_activo = bool(st.session_state.get(f"enviar_gp_pq_{pq_id_sel}", False))
+            enviar_nd_activo = bool(st.session_state.get(f"enviar_nd_pq_{pq_id_sel}", False))
 
-            # CALCULAR ASIENTO CONTABLE CUADRADO DEL PAQUETE SELECCIONADO
-            df_asiento_paquete, dif_no_ded, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
+            df_prev, dif_faltante_prev, ret_prev = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
+
+            c_box_style_t = (
+                '<div style="background:#f8fafc; border:2px solid #0070ba; border-radius:8px; padding:14px; margin:14px 0 10px 0;">'
+                '<h4 style="margin:0 0 4px 0; color:#0070ba;">⚖️ Tratamiento Contable para el Paquete #' + str(pq_id_sel) + ' (Cobro ' + str(agente_actual.get('Proveedor', '')) + '):</h4>'
+                '<p style="margin:0; font-size:13.5px; color:#334155;">Selecciona cómo deseas registrar este cobro en su fecha de operación (<b>' + str(agente_actual.get('Fecha', '')) + '</b>):</p>'
+                '</div>'
+            )
+            st.markdown(c_box_style_t, unsafe_allow_html=True)
+
+            c_btn_h2, c_btn_mt, c_btn_nd = st.columns([1.8, 1.6, 1.2])
+
+            with c_btn_h2:
+                st.markdown("<b style='color:#16a34a;'>📋 Opción 1: Traer de Página 2</b><br><span style='font-size:12px; color:#475569;'>Trae la contabilización fiel registrada en la Página 2 (Auditoría):</span>", unsafe_allow_html=True)
+                btn_h2_type = "primary" if enviar_h2_activo else "secondary"
+                if st.button("📋 Traer Contabilización de Página 2", key=f"btn_h2_act_{pq_id_sel}", type=btn_h2_type, use_container_width=True):
+                    st.session_state[f"enviar_h2_pq_{pq_id_sel}"] = True
+                    st.session_state[f"enviar_gp_pq_{pq_id_sel}"] = False
+                    st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
+                    st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                    st.success("¡Contabilización de la Página 2 aplicada a este paquete!")
+                    st.rerun()
+
+            with c_btn_mt:
+                st.markdown("<b style='color:#0284c7;'>📦 Opción 2: Mercancías en Tránsito</b><br><span style='font-size:12px; color:#475569;'>Imputa el saldo faltante a Inventarios en Tránsito (Cta 14650501):</span>", unsafe_allow_html=True)
+                lbl_btn_mt = f"📦 Mercancías en Tránsito (${dif_faltante_prev:,.2f})" if dif_faltante_prev > 0.05 else "📦 Mercancías en Tránsito (14650501)"
+                btn_mt_type = "primary" if enviar_gp_activo else "secondary"
+                if st.button(lbl_btn_mt, key=f"btn_mt_act_{pq_id_sel}", type=btn_mt_type, use_container_width=True):
+                    st.session_state[f"enviar_gp_pq_{pq_id_sel}"] = True
+                    st.session_state[f"enviar_h2_pq_{pq_id_sel}"] = False
+                    st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
+                    st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                    st.success("¡Faltante asignado a Mercancías en Tránsito (14650501)!")
+                    st.rerun()
+
+            with c_btn_nd:
+                st.markdown("<b style='color:#b91c1c;'>🔴 Opción 3: No Deducibles</b><br><span style='font-size:12px; color:#475569;'>Si no existe factura DIAN ni soporte:</span>", unsafe_allow_html=True)
+                btn_nd_type = "primary" if enviar_nd_activo else "secondary"
+                if st.button(f"🔴 No Deducibles (53950501)", key=f"btn_nd_act_{pq_id_sel}", type=btn_nd_type, use_container_width=True):
+                    st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = True
+                    st.session_state[f"enviar_gp_pq_{pq_id_sel}"] = False
+                    st.session_state[f"enviar_h2_pq_{pq_id_sel}"] = False
+                    st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                    st.success("¡Faltante enviado a Gastos No Deducibles (53950501)!")
+                    st.rerun()
+
+            # CALCULAR ASIENTO CONTABLE SEGÚN TRATAMIENTO SELECCIONADO
+            if st.session_state.get(f"paquete_listo_{pq_id_sel}", False) and (f"asiento_fijo_pq_{pq_id_sel}" in st.session_state or "asiento_fijo" in paquete_activo):
+                df_asiento_paquete = st.session_state.get(f"asiento_fijo_pq_{pq_id_sel}", paquete_activo.get("asiento_fijo")).copy()
+                dif_no_ded = 0.0
+                ret_asum = 0.0
+            elif enviar_h2_activo:
+                df_asiento_paquete = obtener_asiento_contable_hoja2(agente_actual, es_aduanero=False)
+                dif_no_ded = 0.0
+                ret_asum = 0.0
+            elif enviar_gp_activo and dif_faltante_prev > 0.05:
+                # Asiento con imputación a Mercancías en Tránsito (14650501)
+                df_asiento_paquete, _, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
+                asiento_gp_filas = []
+                for _, r_as in df_asiento_paquete.iterrows():
+                    if str(r_as["Código Cuenta"]).strip() == CUENTA_NO_DEDUCIBLE:
+                        asiento_gp_filas.append({
+                            "Código Cuenta": CUENTA_IMPORTACION_TRANSITO,
+                            "Descripción Cuenta": f"Mercancías en Tránsito / Base Propia Agente (Fac {agente_actual.get('Factura', '')})",
+                            "Tercero / NIT": f"{agente_actual.get('NIT Emisor', '')} - {agente_actual.get('Proveedor', '')[:25]}",
+                            "Débito ($)": float(r_as["Débito ($)"]),
+                            "Crédito ($)": 0.0
+                        })
+                    else:
+                        asiento_gp_filas.append(r_as.to_dict())
+                df_asiento_paquete = pd.DataFrame(asiento_gp_filas)
+                dif_no_ded = 0.0
+            else:
+                df_asiento_paquete, dif_no_ded, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
 
             st.markdown(f"#### ⚖️ Asiento Contable del Paquete #{pq_id_sel}:")
             st.caption("Detalle de partida doble de ESTE paquete: cancela las cuentas por pagar de DHL, Agencia y Garaje contra Euro Shipping:")
@@ -4263,10 +4356,44 @@ with tab_triangulacion:
             with c_cuad4:
                 st.metric("Diferencia No Deducible (53950501)", f"${dif_no_ded:,.2f}")
 
-            if dif_cuad_pq < 0.05:
-                st.success(f"✅ **Paquete #{pq_id_sel} Verificado:** Partida doble cuadrada con sumas iguales al centavo ($0.00).")
+            # SECCIÓN DE VALIDACIÓN Y BLOQUEO DE FACTURAS
+            es_validado = st.session_state.get(f"paquete_listo_{pq_id_sel}", False)
+
+            if not es_validado:
+                if dif_cuad_pq < 0.05:
+                    st.success(f"✅ **Partida doble cuadrada al centavo ($0.00).** Ya puedes validar y bloquear este paquete.")
+                else:
+                    st.warning(f"⚠️ Diferencia de cuadre: ${dif_cuad_pq:,.2f}")
+
+                col_val1, col_val2 = st.columns([2.8, 1.4])
+                with col_val1:
+                    st.caption("🔒 Al presionar **'Validar Paquete'**, todas sus facturas de terceros quedan **bloqueadas** para no ser tomadas ni cruzadas en los demás paquetes, y su asiento contable se fija para Siigo (Página 4).")
+                with col_val2:
+                    if st.button("🔒 Validar Paquete (Bloquear Facturas)", key=f"btn_validar_main_{pq_id_sel}", type="primary", use_container_width=True):
+                        st.session_state[f"paquete_listo_{pq_id_sel}"] = True
+                        st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_asiento_paquete.copy()
+                        paquete_activo["asiento_fijo"] = df_asiento_paquete.copy()
+                        paquete_activo["asiento_aprobado"] = df_asiento_paquete.copy()
+
+                        if "asientos_triangulacion_por_factura" not in st.session_state:
+                            st.session_state["asientos_triangulacion_por_factura"] = {}
+                        ag_fac_str = str(agente_actual["Factura"]).strip()
+                        st.session_state["asientos_triangulacion_por_factura"][ag_fac_str] = df_asiento_paquete.copy()
+
+                        guardar_estado_manual(empresa)
+                        st.success(f"🔒 ¡Paquete #{pq_id_sel} VALIDADO! Facturas bloqueadas para los demás paquetes.")
+                        st.rerun()
             else:
-                st.error(f"Diferencia de cuadre: ${dif_cuad_pq:,.2f}")
+                col_desb1, col_desb2 = st.columns([3.2, 1.3])
+                with col_desb1:
+                    st.success(f"🔒 **Paquete #{pq_id_sel} VALIDADO Y BLOQUEADO:** Sus facturas están protegidas contra otros cruces y su asiento está asegurado para la Planilla de Siigo (Página 4).")
+                with col_desb2:
+                    if st.button("🔓 Desbloquear y Modificar", key=f"btn_desbloquear_main_{pq_id_sel}", use_container_width=True):
+                        st.session_state[f"paquete_listo_{pq_id_sel}"] = False
+                        st.session_state.pop(f"asiento_fijo_pq_{pq_id_sel}", None)
+                        paquete_activo.pop("asiento_fijo", None)
+                        guardar_estado_manual(empresa)
+                        st.rerun()
 
             st.markdown("---")
             st.markdown("#### 📥 Exportar Control de Paquetes y Cruces de Importación:")
