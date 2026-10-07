@@ -3928,6 +3928,13 @@ with tab_triangulacion:
                     pq_id_i = idx_ag_i + 1
                     target_i = float(ag_i["Total"])
                     f_ag_dt_i = ag_i["_dt"]
+
+                    if "paquetes_importacion" in st.session_state and pq_id_i in st.session_state["paquetes_importacion"]:
+                        prev_pq_val = st.session_state["paquetes_importacion"][pq_id_i]
+                        if st.session_state.get(f"paquete_listo_{pq_id_i}", False):
+                            # MANTENER INTACTO EL PAQUETE YA VALIDADO
+                            pqs_res[pq_id_i] = prev_pq_val
+                            continue
                     
                     cands_i = pool_t[pool_t["_asignado_pq"] == 0].copy()
                     if cands_i.empty:
@@ -4073,6 +4080,37 @@ with tab_triangulacion:
 
             pqs_actuales = st.session_state["paquetes_importacion"]
 
+            # =========================================================================
+            # PURGA Y BLOQUEO ESTRICTO: NINGUNA FACTURA VALIDADA PUEDE ESTAR EN OTRO PAQUETE
+            # =========================================================================
+            facs_validadas_global = {}  # Factura -> pq_id_donde_esta_validada
+            for p_k_chk, p_v_chk in pqs_actuales.items():
+                if st.session_state.get(f"paquete_listo_{p_k_chk}", False):
+                    df_t_chk = p_v_chk.get("terceros")
+                    if df_t_chk is not None and not df_t_chk.empty:
+                        for f_val in df_t_chk["Factura"].dropna():
+                            f_val_clean = str(f_val).strip()
+                            if f_val_clean:
+                                facs_validadas_global[f_val_clean] = p_k_chk
+
+            hubo_cambio_purga = False
+            for p_k_chk, p_v_chk in pqs_actuales.items():
+                # Si este paquete NO está validado, purgar cualquier factura que pertenezca a un paquete validado
+                if not st.session_state.get(f"paquete_listo_{p_k_chk}", False):
+                    df_t_chk = p_v_chk.get("terceros")
+                    if df_t_chk is not None and not df_t_chk.empty:
+                        mask_ya_en_val = df_t_chk["Factura"].astype(str).str.strip().isin(facs_validadas_global.keys())
+                        if mask_ya_en_val.any():
+                            df_t_filtrado = df_t_chk[~mask_ya_en_val].copy().reset_index(drop=True)
+                            pqs_actuales[p_k_chk]["terceros"] = df_t_filtrado
+                            tot_ag_c = float(p_v_chk["agente"]["Total"])
+                            tot_terc_c = sum([float(r.get("Total Neto", 0.0) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0)))) for _, r in df_t_filtrado.iterrows()])
+                            pqs_actuales[p_k_chk]["diferencia"] = abs(tot_ag_c - tot_terc_c)
+                            hubo_cambio_purga = True
+
+            if hubo_cambio_purga:
+                st.session_state["paquetes_importacion"] = pqs_actuales
+
             # Barra de Acciones y Selección de Paquete (Persistente: no salta al paquete 1)
             c_top_pq1, c_top_pq2 = st.columns([2.5, 1])
             with c_top_pq1:
@@ -4150,6 +4188,22 @@ with tab_triangulacion:
                     st.session_state["asientos_triangulacion_por_factura"][ag_fac_str] = df_asiento_paquete.copy()
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
+
+                    # PURGA INMEDIATA: Quitar las facturas de este paquete recién validado de TODOS los demás paquetes no validados
+                    if not terceros_actual.empty:
+                        facs_recien_validadas = set(terceros_actual["Factura"].astype(str).str.strip().dropna())
+                        for otro_id, otro_pq in pqs_actuales.items():
+                            if otro_id != pq_id_sel and not st.session_state.get(f"paquete_listo_{otro_id}", False):
+                                df_otro_t = otro_pq.get("terceros")
+                                if df_otro_t is not None and not df_otro_t.empty:
+                                    mask_remover = df_otro_t["Factura"].astype(str).str.strip().isin(facs_recien_validadas)
+                                    if mask_remover.any():
+                                        df_otro_limpio = df_otro_t[~mask_remover].copy().reset_index(drop=True)
+                                        otro_pq["terceros"] = df_otro_limpio
+                                        tot_ag_o = float(otro_pq["agente"]["Total"])
+                                        tot_terc_o = sum([float(r.get("Total Neto", 0.0) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0)))) for _, r in df_otro_limpio.iterrows()])
+                                        otro_pq["diferencia"] = abs(tot_ag_o - tot_terc_o)
+                        st.session_state["paquetes_importacion"] = pqs_actuales
 
                     # Traslado y actualización inmediata a df_procesado (Página 2)
                     if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
