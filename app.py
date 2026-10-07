@@ -1948,6 +1948,25 @@ def renderizar_visor_pdf_completo(pdf_bytes, nombre_archivo, fac_sel=None, key_p
 
     st.write("")
 
+    # 2.B SELECTOR DE TAMAÑO VISUAL DE LA FACTURA
+    c_tam1, c_tam2 = st.columns([3, 2])
+    with c_tam1:
+        tam_sel = st.radio(
+            "📐 Tamaño de Vista Previa:",
+            ["📄 Normal (Recomendado - 780px)", "🔍 Grande (Ancho Completo)", "📱 Compacto (600px)"],
+            horizontal=True,
+            index=0,
+            key=f"rad_tam_pdf_{key_prefix}"
+        )
+
+    # Proporción de columnas para centrar y mostrar la hoja en tamaño normal de lectura
+    if "Compacto" in tam_sel:
+        col_ratios = [2.2, 4.0, 2.2]
+    elif "Grande" in tam_sel:
+        col_ratios = [0.01, 9.98, 0.01]
+    else:  # Normal (Recomendado)
+        col_ratios = [1.6, 5.2, 1.6]
+
     # 3. RENDERIZADO VISUAL DIRECTO EN IMÁGENES NATIVAS (CERO CARAS TRISTES, CERO BLOQUEOS DE CHROME)
     imgs_paginas = []
     if HAS_PDFIUM:
@@ -1960,13 +1979,15 @@ def renderizar_visor_pdf_completo(pdf_bytes, nombre_archivo, fac_sel=None, key_p
 
     if imgs_paginas:
         for idx_p, img in enumerate(imgs_paginas):
-            st.markdown(f"""
-            <div style="background:#0070ba; color:white; padding:8px 14px; border-radius:6px 6px 0 0; font-weight:600; font-size:13.5px; display:flex; justify-content:space-between; align-items:center; margin-top:14px;">
-                <span>📄 Factura: {fac_num_str} — {prov_str}</span>
-                <span style="background:rgba(255,255,255,0.25); padding:2px 10px; border-radius:10px; font-size:12px;">Hoja {idx_p + 1} de {len(imgs_paginas)}</span>
-            </div>
-            """, unsafe_allow_html=True)
-            st.image(img, use_container_width=True)
+            c_l, c_mid, c_r = st.columns(col_ratios)
+            with c_mid:
+                st.markdown(f"""
+                <div style="background:#0070ba; color:white; padding:8px 14px; border-radius:6px 6px 0 0; font-weight:600; font-size:13.5px; display:flex; justify-content:space-between; align-items:center; margin-top:16px; box-shadow: 0 2px 4px rgba(0,0,0,0.06);">
+                    <span>📄 Factura: {fac_num_str} — {prov_str}</span>
+                    <span style="background:rgba(255,255,255,0.25); padding:2px 10px; border-radius:10px; font-size:12px;">Hoja {idx_p + 1} de {len(imgs_paginas)}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                st.image(img, use_container_width=True)
     else:
         # Fallback a Canvas HTML5 si pypdfium no estuviera disponible
         visor_height = max(680, min(3600, num_pags_tot * 850))
@@ -4763,3 +4784,4 @@ with tab_siigo:
         )
     else:
         st.info("Primero procesa los documentos en la Pestana 1 para habilitar la descarga.")
+
