@@ -4096,8 +4096,7 @@ with tab_triangulacion:
                     "📦 Selecciona el Paquete de Importación que deseas revisar:",
                     options=pqs_keys,
                     index=idx_actual_sel,
-                    format_func=lambda pid: mapa_pqs_titulos.get(pid, f"Paquete #{pid}"),
-                    key="sb_paquete_activo_widget"
+                    format_func=lambda pid: mapa_pqs_titulos.get(pid, f"Paquete #{pid}")
                 )
                 st.session_state["paquete_seleccionado_id"] = pq_id_sel
                 st.session_state["sel_paquete_activo_key"] = pq_id_sel
@@ -4151,7 +4150,6 @@ with tab_triangulacion:
                     st.session_state["asientos_triangulacion_por_factura"][ag_fac_str] = df_asiento_paquete.copy()
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
 
                     # Traslado y actualización inmediata a df_procesado (Página 2)
                     if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
@@ -4185,7 +4183,6 @@ with tab_triangulacion:
                         st.session_state["asientos_triangulacion_por_factura"].pop(ag_fac_str, None)
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
                     if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
                         df_pr = st.session_state["df_procesado"]
                         idx_ag = df_pr[df_pr["Factura"].astype(str).str.strip() == ag_fac_str].index
@@ -4380,7 +4377,6 @@ with tab_triangulacion:
                                 
                                 st.session_state["paquete_seleccionado_id"] = pq_id_sel
                                 st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                                st.session_state["sb_paquete_activo_widget"] = pq_id_sel
                                 guardar_estado_manual(empresa)
                                 st.rerun()
                 else:
@@ -4427,7 +4423,6 @@ with tab_triangulacion:
                         st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_nuevo
                         st.session_state["paquete_seleccionado_id"] = pq_id_sel
                         st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                        st.session_state["sb_paquete_activo_widget"] = pq_id_sel
                         guardar_estado_manual(empresa)
                         st.success(f"¡Factura {fila_agregada['Factura']} añadida al Paquete #{pq_id_sel}!")
                         st.rerun()
@@ -4458,7 +4453,6 @@ with tab_triangulacion:
                     st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
                     df_as_act = obtener_asiento_contable_hoja2(agente_actual, es_aduanero=False)
                     if st.session_state.get(f"paquete_listo_{pq_id_sel}", False):
                         st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_as_act.copy()
@@ -4479,7 +4473,6 @@ with tab_triangulacion:
                     st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
                     df_as_act, _, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
                     asiento_gp_filas = []
                     for _, r_as in df_as_act.iterrows():
@@ -4512,7 +4505,6 @@ with tab_triangulacion:
                     st.session_state[f"enviar_h2_pq_{pq_id_sel}"] = False
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                    st.session_state["sb_paquete_activo_widget"] = pq_id_sel
                     df_as_act, _, _ = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=True)
                     if st.session_state.get(f"paquete_listo_{pq_id_sel}", False):
                         st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_as_act.copy()
