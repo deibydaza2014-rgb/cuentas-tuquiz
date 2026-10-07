@@ -907,7 +907,8 @@ def generar_asiento_triangulacion_paquete(agente_row, terceros_df, enviar_a_no_d
         prov_nom = str(t.get("Proveedor", "")).upper()
         nit_t = str(t.get("NIT Emisor", ""))
         fac_num = str(t.get("Factura", ""))
-        es_roja = bool(t.get("Ya Registrada", False))
+        es_excluida_manual = bool(t.get("No Contabilizar", False)) or (str(t.get("Factura", "")).strip() in st.session_state.get("facturas_no_contabilizar", set()))
+        es_roja = bool(t.get("Ya Registrada", False)) or es_excluida_manual
         cta_cxp = str(t.get("Cuenta Pasivo Especifica", "")).strip()
         
         if not cta_cxp:
@@ -3580,19 +3581,12 @@ with tab_auditoria:
 
         if asiento_triang_aprobado is not None and not (isinstance(asiento_triang_aprobado, pd.DataFrame) and asiento_triang_aprobado.empty):
             df_asiento = pd.DataFrame(asiento_triang_aprobado).copy()
-            if "Descripción de la Cuenta" not in df_asiento.columns and "Descripción Cuenta" in df_asiento.columns:
-                df_asiento["Descripción de la Cuenta"] = df_asiento["Descripción Cuenta"]
+            if "Descripción Cuenta" in df_asiento.columns and "Descripción de la Cuenta" not in df_asiento.columns:
+                df_asiento = df_asiento.rename(columns={"Descripción Cuenta": "Descripción de la Cuenta"})
+            cols_deseadas = [c for c in ["Código Cuenta", "Descripción de la Cuenta", "Tercero / NIT", "Débito ($)", "Crédito ($)"] if c in df_asiento.columns]
+            df_asiento = df_asiento[cols_deseadas]
                 
-            # SALVAGUARDA DE RETENCIÓN EN LA FUENTE: Si la factura tiene ReteFuente calculada, debe figurar en el comprobante
-            val_rf_check = float(fac_sel.get("ReteFuente", 0.0))
-            cta_rf_esp = str(fac_sel.get("Cta ReteFuente") or ("23652503" if es_aduanero else "23654001")).strip()
-            cuentas_en_asiento = [str(c).strip() for c in df_asiento["Código Cuenta"].values] if "Código Cuenta" in df_asiento.columns else []
-            
-            if val_rf_check > 0 and cta_rf_esp not in cuentas_en_asiento:
-                # Regenerar asiento completo con ReteFuente garantizada
-                df_asiento = obtener_asiento_contable_hoja2(fac_sel, es_aduanero=es_aduanero)
-                asientos_map[fac_num_aud] = df_asiento
-                st.session_state["asientos_triangulacion_por_factura"] = asientos_map
+# Asiento validado en Triangulación se respeta íntegramente sin sobreescribir
                 
             st.markdown(f"""
             <div style="background:#f0fdf4; border:1px solid #86efac; border-left:5px solid #16a34a; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
@@ -3608,101 +3602,154 @@ with tab_auditoria:
             asume_ret = bool(fac_sel.get("Impuestos Asumidos", False))
             cta_cxp_usar = str(fac_sel.get("Cuenta Pasivo Especifica") or fac_sel.get("Cta Contrapartida") or ("22050505" if es_aduanero else "22050501")).strip()
 
-            # 1. Base / Costo (Subtotal real del documento)
-            asiento_filas.append({
-                "Código Cuenta": fac_sel["Cta Principal"],
-                "Descripción de la Cuenta": f"{fac_sel['Categoría']} - {fac_sel['Proveedor'][:25]}",
-                "Tercero / NIT": fac_sel["NIT Emisor"],
-                "Débito ($)": 0.0 if es_nc else fac_sel["Base"],
-                "Crédito ($)": fac_sel["Base"] if es_nc else 0.0
-            })
+            # Verificar si la factura seleccionada es un tercero cruzado en un paquete de importación
+            pq_cruz_encontrado = None
+            if "paquetes_importacion" in st.session_state:
+                for p_k, p_v in st.session_state["paquetes_importacion"].items():
+                    df_terc_v = p_v.get("terceros")
+                    if df_terc_v is not None and not df_terc_v.empty:
+                        if str(fac_sel["Factura"]).strip() in df_terc_v["Factura"].astype(str).str.strip().values:
+                            pq_cruz_encontrado = {
+                                "pq_id": p_k,
+                                "agente": p_v["agente"]["Proveedor"],
+                                "agente_fac": p_v["agente"]["Factura"],
+                                "es_listo": st.session_state.get(f"paquete_listo_{p_k}", False)
+                            }
+                            break
 
-            # 2. IVA Descontable
-            if fac_sel["IVA"] > 0:
-                asiento_filas.append({
-                    "Código Cuenta": fac_sel["Cta IVA"],
-                    "Descripción de la Cuenta": f"IVA Descontable (Base: ${fac_sel['Base']:,.0f})",
-                    "Tercero / NIT": fac_sel["NIT Emisor"],
-                    "Débito ($)": 0.0 if es_nc else fac_sel["IVA"],
-                    "Crédito ($)": fac_sel["IVA"] if es_nc else 0.0
-                })
-
-            tot_ret = round(float(fac_sel["ReteFuente"]) + float(fac_sel.get("ReteICA", 0.0)), 2)
-
-            if asume_ret:
-                # IMPUESTOS ASUMIDOS (Cruza con Agente Aduanero / Triangulación)
-                if tot_ret > 0:
-                    asiento_filas.append({
-                        "Código Cuenta": "53152001",
-                        "Descripción de la Cuenta": "Retenciones Asumidas (Impuestos Asumidos Aduana)",
-                        "Tercero / NIT": fac_sel["NIT Emisor"],
-                        "Débito ($)": tot_ret,
+            if pq_cruz_encontrado is not None and (esta_excl_ind or fac_sel.get("Ya Registrada")):
+                st.markdown(f"""
+                <div style="background:#eff6ff; border:1px solid #bfdbfe; border-left:5px solid #2563eb; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
+                    <h5 style="margin:0 0 4px 0; color:#1e40af;">🔀 Factura con Cuenta Cruzada en Importación (Paquete #{pq_cruz_encontrado['pq_id']} con {pq_cruz_encontrado['agente']})</h5>
+                    <p style="margin:0; color:#1e3a8a; font-size:13.5px;">
+                        Esta factura ya está contabilizada previamente en Siigo (o marcada como 'No Contabilizar'). Por lo tanto, <b>NO se causará como compra independiente en la planilla</b> (no genera base ni IVA repetidos). En la importación de Siigo participa <b>ÚNICAMENTE con su cuenta cruzada ({cta_cxp_usar})</b> debitada en el paquete de importación para cancelar la cuenta por pagar contra {pq_cruz_encontrado['agente']} (Fac {pq_cruz_encontrado['agente_fac']}).
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+                saldo_cruce_ind = float(fac_sel.get("Total Neto", 0.0)) or round(float(fac_sel.get("Base", 0.0)) + float(fac_sel.get("IVA", 0.0)), 2)
+                asiento_filas = [
+                    {
+                        "Código Cuenta": cta_cxp_usar,
+                        "Descripción de la Cuenta": f"Cancela CxP {fac_sel['Proveedor'][:20]} (Fac {fac_sel['Factura']})",
+                        "Tercero / NIT": f"{fac_sel['NIT Emisor']} - {fac_sel['Proveedor'][:22]}",
+                        "Débito ($)": saldo_cruce_ind,
                         "Crédito ($)": 0.0
-                    })
-                if fac_sel["ReteFuente"] > 0:
-                    cta_rf_usar = str(fac_sel.get("Cta ReteFuente") or ("23652503" if es_aduanero else "23654001")).strip()
-                    asiento_filas.append({
-                        "Código Cuenta": cta_rf_usar,
-                        "Descripción de la Cuenta": f"ReteFuente Practicada ({fac_sel.get('Categoría', 'Servicios')})",
-                        "Tercero / NIT": fac_sel["NIT Emisor"],
+                    },
+                    {
+                        "Código Cuenta": "22050501",
+                        "Descripción de la Cuenta": f"CxP Agente Aduanero (Fac {pq_cruz_encontrado['agente_fac']})",
+                        "Tercero / NIT": f"{fac_sel['NIT Emisor']} - {fac_sel['Proveedor'][:22]}",
                         "Débito ($)": 0.0,
-                        "Crédito ($)": fac_sel["ReteFuente"]
-                    })
-                if fac_sel.get("ReteICA", 0.0) > 0:
-                    cta_ri_usar = str(fac_sel.get("Cta ReteICA") or ("23680505" if es_aduanero else "23680501")).strip()
-                    asiento_filas.append({
-                        "Código Cuenta": cta_ri_usar,
-                        "Descripción de la Cuenta": "Retención ICA Practicada",
-                        "Tercero / NIT": fac_sel["NIT Emisor"],
-                        "Débito ($)": 0.0,
-                        "Crédito ($)": fac_sel["ReteICA"]
-                    })
-                # Saldo por pagar al pasivo es Base + IVA (ej. .388.770 + 63.169 = .651.939)
-                saldo_cxp = round(fac_sel["Base"] + fac_sel["IVA"], 2)
+                        "Crédito ($)": saldo_cruce_ind
+                    }
+                ]
+            elif esta_excl_ind or fac_sel.get("Ya Registrada"):
+                st.markdown(f"""
+                <div style="background:#fef2f2; border:1px solid #fecaca; border-left:5px solid #dc2626; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
+                    <h5 style="margin:0 0 4px 0; color:#991b1b;">🚫 Factura Ya Contabilizada / Excluida (No Contabilizar)</h5>
+                    <p style="margin:0; color:#7f1d1d; font-size:13.5px;">
+                        Esta factura ya fue contabilizada previamente en Siigo o ha sido excluida manualmente. <b>No generará asiento de compra en la planilla de Siigo.</b> A continuación se muestra su estructura contable solo para fines informativos y de auditoría:
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+            if not asiento_filas:
+                # 1. Base / Costo (Subtotal real del documento)
                 asiento_filas.append({
-                    "Código Cuenta": cta_cxp_usar,
-                    "Descripción de la Cuenta": f"CxP Agente / Proveedor - Fac {fac_sel['Factura']}",
+                    "Código Cuenta": fac_sel["Cta Principal"],
+                    "Descripción de la Cuenta": f"{fac_sel['Categoría']} - {fac_sel['Proveedor'][:25]}",
                     "Tercero / NIT": fac_sel["NIT Emisor"],
-                    "Débito ($)": saldo_cxp if es_nc else 0.0,
-                    "Crédito ($)": 0.0 if es_nc else saldo_cxp
+                    "Débito ($)": 0.0 if es_nc else fac_sel["Base"],
+                    "Crédito ($)": fac_sel["Base"] if es_nc else 0.0
                 })
-            else:
-                # RETENCIONES ORDINARIAS PRACTICADAS AL PROVEEDOR
-                if fac_sel["ReteFuente"] > 0:
-                    cta_rf_usar = str(fac_sel.get("Cta ReteFuente") or ("23652503" if es_aduanero else "23654001")).strip()
+
+                # 2. IVA Descontable
+                if fac_sel["IVA"] > 0:
                     asiento_filas.append({
-                        "Código Cuenta": cta_rf_usar,
-                        "Descripción de la Cuenta": f"ReteFuente Practicada ({fac_sel.get('Categoría', 'Compras/Servicios')})",
+                        "Código Cuenta": fac_sel["Cta IVA"],
+                        "Descripción de la Cuenta": f"IVA Descontable (Base: ${fac_sel['Base']:,.0f})",
                         "Tercero / NIT": fac_sel["NIT Emisor"],
-                        "Débito ($)": fac_sel["ReteFuente"] if es_nc else 0.0,
-                        "Crédito ($)": 0.0 if es_nc else fac_sel["ReteFuente"]
-                    })
-                if fac_sel.get("ReteICA", 0.0) > 0:
-                    cta_ri_usar = str(fac_sel.get("Cta ReteICA") or ("23680505" if es_aduanero else "23680501")).strip()
-                    asiento_filas.append({
-                        "Código Cuenta": cta_ri_usar,
-                        "Descripción de la Cuenta": "Retención ICA Practicada",
-                        "Tercero / NIT": fac_sel["NIT Emisor"],
-                        "Débito ($)": fac_sel["ReteICA"] if es_nc else 0.0,
-                        "Crédito ($)": 0.0 if es_nc else fac_sel["ReteICA"]
-                    })
-                if fac_sel.get("ReteIVA", 0.0) > 0:
-                    asiento_filas.append({
-                        "Código Cuenta": "23670101",
-                        "Descripción de la Cuenta": "Retención de IVA Practicada (15%)",
-                        "Tercero / NIT": fac_sel["NIT Emisor"],
-                        "Débito ($)": fac_sel["ReteIVA"] if es_nc else 0.0,
-                        "Crédito ($)": 0.0 if es_nc else fac_sel["ReteIVA"]
+                        "Débito ($)": 0.0 if es_nc else fac_sel["IVA"],
+                        "Crédito ($)": fac_sel["IVA"] if es_nc else 0.0
                     })
 
-                neto_cxp = round(fac_sel["Base"] + fac_sel["IVA"] - fac_sel["ReteFuente"] - fac_sel.get("ReteICA", 0.0) - fac_sel.get("ReteIVA", 0.0), 2)
-                asiento_filas.append({
-                    "Código Cuenta": cta_cxp_usar,
-                    "Descripción de la Cuenta": f"Proveedores Nacionales - Fac {fac_sel['Factura']}",
-                    "Tercero / NIT": fac_sel["NIT Emisor"],
-                    "Débito ($)": neto_cxp if es_nc else 0.0,
-                    "Crédito ($)": 0.0 if es_nc else neto_cxp
-                })
+                tot_ret = round(float(fac_sel["ReteFuente"]) + float(fac_sel.get("ReteICA", 0.0)), 2)
+
+                if asume_ret:
+                    # IMPUESTOS ASUMIDOS (Cruza con Agente Aduanero / Triangulación)
+                    if tot_ret > 0:
+                        asiento_filas.append({
+                            "Código Cuenta": "53152001",
+                            "Descripción de la Cuenta": "Retenciones Asumidas (Impuestos Asumidos Aduana)",
+                            "Tercero / NIT": fac_sel["NIT Emisor"],
+                            "Débito ($)": tot_ret,
+                            "Crédito ($)": 0.0
+                        })
+                    if fac_sel["ReteFuente"] > 0:
+                        cta_rf_usar = str(fac_sel.get("Cta ReteFuente") or ("23652503" if es_aduanero else "23654001")).strip()
+                        asiento_filas.append({
+                            "Código Cuenta": cta_rf_usar,
+                            "Descripción de la Cuenta": f"ReteFuente Practicada ({fac_sel.get('Categoría', 'Servicios')})",
+                            "Tercero / NIT": fac_sel["NIT Emisor"],
+                            "Débito ($)": 0.0,
+                            "Crédito ($)": fac_sel["ReteFuente"]
+                        })
+                    if fac_sel.get("ReteICA", 0.0) > 0:
+                        cta_ri_usar = str(fac_sel.get("Cta ReteICA") or ("23680505" if es_aduanero else "23680501")).strip()
+                        asiento_filas.append({
+                            "Código Cuenta": cta_ri_usar,
+                            "Descripción de la Cuenta": "Retención ICA Practicada",
+                            "Tercero / NIT": fac_sel["NIT Emisor"],
+                            "Débito ($)": 0.0,
+                            "Crédito ($)": fac_sel["ReteICA"]
+                        })
+                    # Saldo por pagar al pasivo es Base + IVA (ej. .388.770 + 63.169 = .651.939)
+                    saldo_cxp = round(fac_sel["Base"] + fac_sel["IVA"], 2)
+                    asiento_filas.append({
+                        "Código Cuenta": cta_cxp_usar,
+                        "Descripción de la Cuenta": f"CxP Agente / Proveedor - Fac {fac_sel['Factura']}",
+                        "Tercero / NIT": fac_sel["NIT Emisor"],
+                        "Débito ($)": saldo_cxp if es_nc else 0.0,
+                        "Crédito ($)": 0.0 if es_nc else saldo_cxp
+                    })
+                else:
+                    # RETENCIONES ORDINARIAS PRACTICADAS AL PROVEEDOR
+                    if fac_sel["ReteFuente"] > 0:
+                        cta_rf_usar = str(fac_sel.get("Cta ReteFuente") or ("23652503" if es_aduanero else "23654001")).strip()
+                        asiento_filas.append({
+                            "Código Cuenta": cta_rf_usar,
+                            "Descripción de la Cuenta": f"ReteFuente Practicada ({fac_sel.get('Categoría', 'Compras/Servicios')})",
+                            "Tercero / NIT": fac_sel["NIT Emisor"],
+                            "Débito ($)": fac_sel["ReteFuente"] if es_nc else 0.0,
+                            "Crédito ($)": 0.0 if es_nc else fac_sel["ReteFuente"]
+                        })
+                    if fac_sel.get("ReteICA", 0.0) > 0:
+                        cta_ri_usar = str(fac_sel.get("Cta ReteICA") or ("23680505" if es_aduanero else "23680501")).strip()
+                        asiento_filas.append({
+                            "Código Cuenta": cta_ri_usar,
+                            "Descripción de la Cuenta": "Retención ICA Practicada",
+                            "Tercero / NIT": fac_sel["NIT Emisor"],
+                            "Débito ($)": fac_sel["ReteICA"] if es_nc else 0.0,
+                            "Crédito ($)": 0.0 if es_nc else fac_sel["ReteICA"]
+                        })
+                    if fac_sel.get("ReteIVA", 0.0) > 0:
+                        asiento_filas.append({
+                            "Código Cuenta": "23670101",
+                            "Descripción de la Cuenta": "Retención de IVA Practicada (15%)",
+                            "Tercero / NIT": fac_sel["NIT Emisor"],
+                            "Débito ($)": fac_sel["ReteIVA"] if es_nc else 0.0,
+                            "Crédito ($)": 0.0 if es_nc else fac_sel["ReteIVA"]
+                        })
+
+                    neto_cxp = round(fac_sel["Base"] + fac_sel["IVA"] - fac_sel["ReteFuente"] - fac_sel.get("ReteICA", 0.0) - fac_sel.get("ReteIVA", 0.0), 2)
+                    asiento_filas.append({
+                        "Código Cuenta": cta_cxp_usar,
+                        "Descripción de la Cuenta": f"Proveedores Nacionales - Fac {fac_sel['Factura']}",
+                        "Tercero / NIT": fac_sel["NIT Emisor"],
+                        "Débito ($)": neto_cxp if es_nc else 0.0,
+                        "Crédito ($)": 0.0 if es_nc else neto_cxp
+                    })
+
 
             df_asiento = pd.DataFrame(asiento_filas)
 
@@ -4025,6 +4072,96 @@ with tab_triangulacion:
                 terceros_actual = paquete_activo["terceros"]
                 tot_agente_actual = float(agente_actual["Total"])
 
+                # Tratamiento contable y asiento de partida doble del paquete
+                enviar_h2_activo = bool(st.session_state.get(f"enviar_h2_pq_{pq_id_sel}", False))
+                enviar_gp_activo = bool(st.session_state.get(f"enviar_gp_pq_{pq_id_sel}", False))
+                enviar_nd_activo = bool(st.session_state.get(f"enviar_nd_pq_{pq_id_sel}", False))
+
+                df_prev, dif_faltante_prev, ret_prev = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
+
+                if st.session_state.get(f"paquete_listo_{pq_id_sel}", False) and (f"asiento_fijo_pq_{pq_id_sel}" in st.session_state or "asiento_fijo" in paquete_activo):
+                    df_asiento_paquete = st.session_state.get(f"asiento_fijo_pq_{pq_id_sel}", paquete_activo.get("asiento_fijo")).copy()
+                    dif_no_ded = 0.0
+                    ret_asum = 0.0
+                elif enviar_h2_activo:
+                    df_asiento_paquete = obtener_asiento_contable_hoja2(agente_actual, es_aduanero=False)
+                    dif_no_ded = 0.0
+                    ret_asum = 0.0
+                elif enviar_gp_activo and dif_faltante_prev > 0.05:
+                    df_asiento_paquete, _, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
+                    asiento_gp_filas = []
+                    for _, r_as in df_asiento_paquete.iterrows():
+                        if str(r_as["Código Cuenta"]).strip() == CUENTA_NO_DEDUCIBLE:
+                            asiento_gp_filas.append({
+                                "Código Cuenta": CUENTA_IMPORTACION_TRANSITO,
+                                "Descripción Cuenta": f"Mercancías en Tránsito / Base Propia Agente (Fac {agente_actual.get('Factura', '')})",
+                                "Tercero / NIT": f"{agente_actual.get('NIT Emisor', '')} - {agente_actual.get('Proveedor', '')[:25]}",
+                                "Débito ($)": float(r_as["Débito ($)"]),
+                                "Crédito ($)": 0.0
+                            })
+                        else:
+                            asiento_gp_filas.append(r_as.to_dict())
+                    df_asiento_paquete = pd.DataFrame(asiento_gp_filas)
+                    dif_no_ded = 0.0
+                else:
+                    df_asiento_paquete, dif_no_ded, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
+
+                def ejecutar_validacion_pq():
+                    st.session_state[f"paquete_listo_{pq_id_sel}"] = True
+                    st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_asiento_paquete.copy()
+                    paquete_activo["asiento_fijo"] = df_asiento_paquete.copy()
+                    paquete_activo["asiento_aprobado"] = df_asiento_paquete.copy()
+                    if "asientos_triangulacion_por_factura" not in st.session_state:
+                        st.session_state["asientos_triangulacion_por_factura"] = {}
+                    ag_fac_str = str(agente_actual["Factura"]).strip()
+                    st.session_state["asientos_triangulacion_por_factura"][ag_fac_str] = df_asiento_paquete.copy()
+
+                    # Traslado y actualización inmediata a df_procesado (Página 2)
+                    if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
+                        df_pr = st.session_state["df_procesado"]
+                        idx_ag = df_pr[df_pr["Factura"].astype(str).str.strip() == ag_fac_str].index
+                        if not idx_ag.empty:
+                            df_pr.at[idx_ag[0], "Estado Registro"] = f"🔀 Validada en Triangulación (Pq #{pq_id_sel})"
+                            df_pr.at[idx_ag[0], "Paquete Validado"] = pq_id_sel
+                        if not terceros_actual.empty:
+                            for _, tr_row in terceros_actual.iterrows():
+                                tr_fac = str(tr_row["Factura"]).strip()
+                                idx_t = df_pr[df_pr["Factura"].astype(str).str.strip() == tr_fac].index
+                                if not idx_t.empty:
+                                    es_r = bool(df_pr.at[idx_t[0], "Ya Registrada"]) or bool(df_pr.at[idx_t[0], "No Contabilizar"]) or (tr_fac in st.session_state.get("facturas_no_contabilizar", set()))
+                                    if es_r:
+                                        df_pr.at[idx_t[0], "Estado Registro"] = f"🔴 Cruzada en Pq #{pq_id_sel} (Solo cuenta pasivo)"
+                                    else:
+                                        df_pr.at[idx_t[0], "Estado Registro"] = f"⚪ Cruzada en Pq #{pq_id_sel} (Causada en triangulación)"
+                                    df_pr.at[idx_t[0], "Paquete Validado"] = pq_id_sel
+                                    df_pr.at[idx_t[0], "Cruza Con Agente"] = ag_fac_str
+                        st.session_state["df_procesado"] = df_pr
+                    guardar_estado_manual(empresa)
+
+                def ejecutar_desbloqueo_pq():
+                    st.session_state[f"paquete_listo_{pq_id_sel}"] = False
+                    st.session_state.pop(f"asiento_fijo_pq_{pq_id_sel}", None)
+                    paquete_activo.pop("asiento_fijo", None)
+                    paquete_activo.pop("asiento_aprobado", None)
+                    ag_fac_str = str(agente_actual["Factura"]).strip()
+                    if "asientos_triangulacion_por_factura" in st.session_state:
+                        st.session_state["asientos_triangulacion_por_factura"].pop(ag_fac_str, None)
+                    if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
+                        df_pr = st.session_state["df_procesado"]
+                        idx_ag = df_pr[df_pr["Factura"].astype(str).str.strip() == ag_fac_str].index
+                        if not idx_ag.empty:
+                            df_pr.at[idx_ag[0], "Estado Registro"] = "🟡 Agente Aduanero"
+                        if not terceros_actual.empty:
+                            for _, tr_row in terceros_actual.iterrows():
+                                tr_fac = str(tr_row["Factura"]).strip()
+                                idx_t = df_pr[df_pr["Factura"].astype(str).str.strip() == tr_fac].index
+                                if not idx_t.empty:
+                                    es_r = bool(df_pr.at[idx_t[0], "Ya Registrada"]) or bool(df_pr.at[idx_t[0], "No Contabilizar"])
+                                    cp = df_pr.at[idx_t[0], "Comprobante Previo"]
+                                    df_pr.at[idx_t[0], "Estado Registro"] = f"🔴 Ya Registrada ({cp})" if es_r else "⚪ Compra Pendiente"
+                        st.session_state["df_procesado"] = df_pr
+                    guardar_estado_manual(empresa)
+
             with c_top_pq2:
                 st.write("")
                 st.write("")
@@ -4053,21 +4190,15 @@ with tab_triangulacion:
 
                 es_val_card = st.session_state.get(f"paquete_listo_{pq_id_sel}", False)
                 if not es_val_card:
-                    st.info(f"ℹ️ Cuando este paquete esté cuadrado, valídalo para bloquear sus facturas y que pase a Siigo.")
+                    st.info(f"ℹ️ Cuando este paquete esté cuadrado, valídalo para trasladar su asiento a Página 2 y bloquear sus facturas.")
                     if st.button(f"🔒 Validar Paquete #{pq_id_sel}", key=f"btn_val_card_{pq_id_sel}", type="primary", use_container_width=True):
-                        st.session_state[f"paquete_listo_{pq_id_sel}"] = True
-                        st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                        guardar_estado_manual(empresa)
-                        st.success(f"🔒 ¡Paquete #{pq_id_sel} validado y bloqueado!")
+                        ejecutar_validacion_pq()
+                        st.success(f"🔒 ¡Paquete #{pq_id_sel} validado y trasladado a Página 2!")
                         st.rerun()
                 else:
-                    st.success(f"🔒 **Paquete #{pq_id_sel} VALIDADO Y BLOQUEADO**")
+                    st.success(f"🔒 **Paquete #{pq_id_sel} VALIDADO Y TRASLADADO A PÁGINA 2**")
                     if st.button(f"🔓 Desbloquear Paquete #{pq_id_sel}", key=f"btn_desb_card_{pq_id_sel}", use_container_width=True):
-                        st.session_state[f"paquete_listo_{pq_id_sel}"] = False
-                        st.session_state.pop(f"asiento_fijo_pq_{pq_id_sel}", None)
-                        paquete_activo.pop("asiento_fijo", None)
-                        st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                        guardar_estado_manual(empresa)
+                        ejecutar_desbloqueo_pq()
                         st.rerun()
 
             with col_pq2:
@@ -4369,30 +4500,17 @@ with tab_triangulacion:
                 with col_val1:
                     st.caption("🔒 Al presionar **'Validar Paquete'**, todas sus facturas de terceros quedan **bloqueadas** para no ser tomadas ni cruzadas en los demás paquetes, y su asiento contable se fija para Siigo (Página 4).")
                 with col_val2:
-                    if st.button("🔒 Validar Paquete (Bloquear Facturas)", key=f"btn_validar_main_{pq_id_sel}", type="primary", use_container_width=True):
-                        st.session_state[f"paquete_listo_{pq_id_sel}"] = True
-                        st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_asiento_paquete.copy()
-                        paquete_activo["asiento_fijo"] = df_asiento_paquete.copy()
-                        paquete_activo["asiento_aprobado"] = df_asiento_paquete.copy()
-
-                        if "asientos_triangulacion_por_factura" not in st.session_state:
-                            st.session_state["asientos_triangulacion_por_factura"] = {}
-                        ag_fac_str = str(agente_actual["Factura"]).strip()
-                        st.session_state["asientos_triangulacion_por_factura"][ag_fac_str] = df_asiento_paquete.copy()
-
-                        guardar_estado_manual(empresa)
-                        st.success(f"🔒 ¡Paquete #{pq_id_sel} VALIDADO! Facturas bloqueadas para los demás paquetes.")
+                    if st.button("🔒 Validar Paquete (Bloquear Facturas y Trasladar a Página 2)", key=f"btn_validar_main_{pq_id_sel}", type="primary", use_container_width=True):
+                        ejecutar_validacion_pq()
+                        st.success(f"🔒 ¡Paquete #{pq_id_sel} VALIDADO y trasladado a Página 2 con éxito!")
                         st.rerun()
             else:
                 col_desb1, col_desb2 = st.columns([3.2, 1.3])
                 with col_desb1:
-                    st.success(f"🔒 **Paquete #{pq_id_sel} VALIDADO Y BLOQUEADO:** Sus facturas están protegidas contra otros cruces y su asiento está asegurado para la Planilla de Siigo (Página 4).")
+                    st.success(f"🔒 **Paquete #{pq_id_sel} VALIDADO Y TRASLADADO A PÁGINA 2:** Sus facturas están protegidas contra otros cruces y su asiento está asegurado para la Planilla de Siigo (Página 4).")
                 with col_desb2:
                     if st.button("🔓 Desbloquear y Modificar", key=f"btn_desbloquear_main_{pq_id_sel}", use_container_width=True):
-                        st.session_state[f"paquete_listo_{pq_id_sel}"] = False
-                        st.session_state.pop(f"asiento_fijo_pq_{pq_id_sel}", None)
-                        paquete_activo.pop("asiento_fijo", None)
-                        guardar_estado_manual(empresa)
+                        ejecutar_desbloqueo_pq()
                         st.rerun()
 
             st.markdown("---")
@@ -4737,6 +4855,10 @@ with tab_siigo:
             idx_pq_cruce = 0
             for p_k, p_v in pqs_listos_siigo.items():
                 ag_item = p_v["agente"]
+                ag_fac_chk = str(ag_item.get("Factura", "")).strip()
+                # Si la factura del agente ya fue exportada con su asiento de triangulación en df_p, no duplicar
+                if ag_fac_chk in df_p["Factura"].astype(str).str.strip().values and ag_fac_chk in asientos_triang_map_siigo:
+                    continue
                 terc_items = p_v["terceros"]
                 fecha_op_raw = ag_item["Fecha"]
                 fecha_op_clean = normalizar_fecha_dian(fecha_op_raw)
