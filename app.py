@@ -932,62 +932,42 @@ def generar_asiento_triangulacion_paquete(agente_row, terceros_df, enviar_a_no_d
         if t_saldo_pagar <= 0:
             t_saldo_pagar = round(t_base + t_iva, 2)
             
-        if es_roja:
-            # Factura roja (ya registrada en Siigo)
-            asume_en_causacion = bool(t.get("Impuestos Asumidos", False))
-            
-            if asume_en_causacion or tot_ret == 0:
-                cxp_cancelar = t_saldo_pagar
-                ret_a_asumir = 0.0
-                suma_cxp_canceladas += cxp_cancelar
-                
-                asiento.append({
-                    "Código Cuenta": cta_cxp,
-                    "Descripción Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
-                    "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
-                    "Débito ($)": cxp_cancelar,
-                    "Crédito ($)": 0.0
-                })
-            else:
-                cxp_cancelar = round(t_saldo_pagar - tot_ret, 2)
-                ret_a_asumir = tot_ret
-                suma_cxp_canceladas += cxp_cancelar
-                suma_ret_asumidas += ret_a_asumir
-                
-                asiento.append({
-                    "Código Cuenta": cta_cxp,
-                    "Descripción Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
-                    "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
-                    "Débito ($)": cxp_cancelar,
-                    "Crédito ($)": 0.0
-                })
-                if ret_a_asumir > 0:
-                    asiento.append({
-                        "Código Cuenta": CUENTA_RETENCION_ASUMIDA,
-                        "Descripción Cuenta": f"Retención Asumida Fac {fac_num} ({prov_nom[:18]})",
-                        "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
-                        "Débito ($)": ret_a_asumir,
-                        "Crédito ($)": 0.0
-                    })
-        else:
-            # Factura blanca (pendiente por registrar)
-            costo_neto = t_base
-            suma_costo_blancas += costo_neto
-            suma_iva_blancas += t_iva
+        # REGLA DE TRIANGULACIÓN: Toda factura de tercero traída a la triangulación ÚNICAMENTE
+        # aporta su Cuenta por Pagar (pasivo: 22050505 Agencia, 23359501 DHL, etc.) por su Saldo por Pagar (Base + IVA),
+        # ya que la causación del gasto/costo e IVA de esa factura se realiza en su propio comprobante individual.
+        asume_en_causacion = bool(t.get("Impuestos Asumidos", False))
+        
+        if asume_en_causacion or tot_ret == 0:
+            cxp_cancelar = t_saldo_pagar
+            ret_a_asumir = 0.0
+            suma_cxp_canceladas += cxp_cancelar
             
             asiento.append({
-                "Código Cuenta": CUENTA_IMPORTACION_TRANSITO,
-                "Descripción Cuenta": f"Importación en Tránsito (Fac {fac_num})",
+                "Código Cuenta": cta_cxp,
+                "Descripción Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
                 "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
-                "Débito ($)": costo_neto,
+                "Débito ($)": cxp_cancelar,
                 "Crédito ($)": 0.0
             })
-            if t_iva > 0:
+        else:
+            cxp_cancelar = round(t_saldo_pagar - tot_ret, 2)
+            ret_a_asumir = tot_ret
+            suma_cxp_canceladas += cxp_cancelar
+            suma_ret_asumidas += ret_a_asumir
+            
+            asiento.append({
+                "Código Cuenta": cta_cxp,
+                "Descripción Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
+                "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
+                "Débito ($)": cxp_cancelar,
+                "Crédito ($)": 0.0
+            })
+            if ret_a_asumir > 0:
                 asiento.append({
-                    "Código Cuenta": CUENTA_IVA_IMPORTACION,
-                    "Descripción Cuenta": f"IVA Descontable Fac {fac_num}",
+                    "Código Cuenta": CUENTA_RETENCION_ASUMIDA,
+                    "Descripción Cuenta": f"Retención Asumida Fac {fac_num} ({prov_nom[:18]})",
                     "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
-                    "Débito ($)": t_iva,
+                    "Débito ($)": ret_a_asumir,
                     "Crédito ($)": 0.0
                 })
 
@@ -4317,7 +4297,7 @@ with tab_triangulacion:
                             "Subtotal (Base)": t_b,
                             "IVA": t_iv,
                             "Saldo Cruce": s_cruce,
-                            "Cuenta Contable": f"⚠️ {cta_actual_tr} (CxP)" if es_r else "14650501 (Tránsito)"
+                            "Cuenta Contable": f"{cta_actual_tr} (CxP a Cruzar)"
                         })
                     df_terc_disp = pd.DataFrame(filas_terc_disp)
                     st.dataframe(df_terc_disp.style.format({
