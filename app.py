@@ -3990,46 +3990,32 @@ with tab_auditoria:
                             }
                             break
 
-            if pq_cruz_encontrado is not None and (esta_excl_ind or fac_sel.get("Ya Registrada")):
+            saldo_cruce_ind = obtener_saldo_cruce_factura(fac_sel)
+
+            if pq_cruz_encontrado is not None:
                 st.markdown(f"""
-                <div style="background:#eff6ff; border:1px solid #bfdbfe; border-left:5px solid #2563eb; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
-                    <h5 style="margin:0 0 4px 0; color:#1e40af;">🔀 Factura con Cuenta Cruzada en Importación (Paquete #{pq_cruz_encontrado['pq_id']} con {pq_cruz_encontrado['agente']})</h5>
-                    <p style="margin:0; color:#1e3a8a; font-size:13.5px;">
-                        Esta factura ya está contabilizada previamente en Siigo (o marcada como 'No Contabilizar'). Por lo tanto, <b>NO se causará como compra independiente en la planilla</b> (no genera base ni IVA repetidos). En la importación de Siigo participa <b>ÚNICAMENTE con su cuenta cruzada ({cta_cxp_usar})</b> debitada en el paquete de importación para cancelar la cuenta por pagar contra {pq_cruz_encontrado['agente']} (Fac {pq_cruz_encontrado['agente_fac']}).
+                <div style="background:#eff6ff; border:1px solid #bfdbfe; border-left:5px solid #2563eb; border-radius:8px; padding:14px 18px; margin-bottom:14px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h5 style="margin:0 0 4px 0; color:#1e40af;">🔀 Factura Vinculada en Paquete de Importación #{pq_cruz_encontrado['pq_id']} (con {pq_cruz_encontrado['agente']} - Fac {pq_cruz_encontrado['agente_fac']})</h5>
+                        <span style="background:#dbeafe; color:#1e40af; font-size:12px; font-weight:bold; padding:3px 8px; border-radius:12px;">Cruce Activo en Triangulación</span>
+                    </div>
+                    <p style="margin:6px 0 0 0; color:#1e3a8a; font-size:13.5px;">
+                        Esta factura mantiene su <b>contabilización propia completa</b> (Costo/Gasto e IVA). En la importación, lo único que se cruza es su <b>Cuenta por Pagar ({cta_cxp_usar})</b> por valor de <b>${saldo_cruce_ind:,.2f}</b>, la cual se debita en el paquete de triangulación para cancelar la obligación y trasladar la deuda al agente aduanero.
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
-                saldo_cruce_ind = obtener_saldo_cruce_factura(fac_sel)
-                asiento_filas = [
-                    {
-                        "Código Cuenta": cta_cxp_usar,
-                        "Descripción de la Cuenta": f"Cancela CxP {fac_sel['Proveedor'][:20]} (Fac {fac_sel['Factura']})",
-                        "Tercero / NIT": f"{fac_sel['NIT Emisor']} - {fac_sel['Proveedor'][:22]}",
-                        "Débito ($)": saldo_cruce_ind,
-                        "Crédito ($)": 0.0
-                    },
-                    {
-                        "Código Cuenta": "22050501",
-                        "Descripción de la Cuenta": f"CxP Agente Aduanero (Fac {pq_cruz_encontrado['agente_fac']})",
-                        "Tercero / NIT": f"{fac_sel['NIT Emisor']} - {fac_sel['Proveedor'][:22]}",
-                        "Débito ($)": 0.0,
-                        "Crédito ($)": saldo_cruce_ind
-                    }
-                ]
-            elif esta_excl_ind or fac_sel.get("Ya Registrada"):
+            elif esta_excl_ind:
                 st.markdown(f"""
                 <div style="background:#fef2f2; border:1px solid #fecaca; border-left:5px solid #dc2626; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
-                    <h5 style="margin:0 0 4px 0; color:#991b1b;">🚫 Factura Ya Contabilizada / Excluida (No Contabilizar)</h5>
+                    <h5 style="margin:0 0 4px 0; color:#991b1b;">🚫 Factura Marcada como 'No Contabilizar'</h5>
                     <p style="margin:0; color:#7f1d1d; font-size:13.5px;">
-                        Esta factura ya fue contabilizada previamente en Siigo o ha sido excluida manualmente. <b>No generará asiento de compra en la planilla de Siigo.</b> A continuación se muestra su estructura contable solo para fines informativos y de auditoría:
+                        Esta factura ha sido excluida de la planilla de compras de Siigo. A continuación se muestra su estructura contable para fines informativos y de auditoría:
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
 
-            if not asiento_filas:
-                df_asiento = obtener_asiento_contable_hoja2(fac_sel, es_aduanero=es_aduanero)
-            else:
-                df_asiento = pd.DataFrame(asiento_filas)
+            # Cada factura SIEMPRE mantiene su causación contable propia íntegra
+            df_asiento = obtener_asiento_contable_hoja2(fac_sel, es_aduanero=es_aduanero)
 
         cols_as_dsp = [c for c in ["Código Cuenta", "Descripción de la Cuenta", "Tercero / NIT", "Débito ($)", "Crédito ($)"] if c in df_asiento.columns]
         st.dataframe(
@@ -5393,7 +5379,6 @@ with tab_siigo:
         df_p = df_full[
             (~ya_reg_siigo) &
             (~cond_excluidas) &
-            (~df_full["Factura"].isin(facs_en_pqs_import)) &
             (~cond_imp_adu)
         ].copy()
 
