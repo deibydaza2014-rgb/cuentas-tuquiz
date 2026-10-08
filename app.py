@@ -1,4 +1,4 @@
-import pickle 
+import pickle
 import shutil
 import json
 import base64
@@ -244,6 +244,8 @@ def guardar_estado_manual(empresa_dict):
         with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
         st.session_state["_ultimo_guardado_manual"] = now_str
+        import gc
+        gc.collect()
         return True
     except Exception:
         return False
@@ -1661,7 +1663,7 @@ def desbloquear_pdf_bytes(fbytes, nit_receptor=None, claves_extra=None, nits_emi
     except Exception:
         return fbytes, False
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=40, ttl=1200)
 def cache_extraer_textos_pdf(fbytes, nit_receptor="9013464125"):
     """Extrae el texto de todas las páginas de un PDF, desbloqueándolo automáticamente si está protegido."""
     try:
@@ -5480,4 +5482,7 @@ with tab_siigo:
         )
     else:
         st.info("Primero procesa los documentos en la Pestana 1 para habilitar la descarga.")
+
+import gc
+gc.collect()
 
