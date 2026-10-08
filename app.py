@@ -3406,9 +3406,28 @@ with tab_auditoria:
             tag_ex = " 🚫 [NO CONTABILIZAR]" if (fn in cur_no_contab or r.get("No Contabilizar")) else ""
             opciones_fac.append(f"[{r['Comprobante Siigo']}] {r['Fecha']} - {fn}{tag_ex} - {r['Proveedor']} (${r['Total']:,.0f})")
 
-        seleccion = st.selectbox("Selecciona una factura para auditar:", opciones_fac)
+        # Preservar la factura seleccionada para que no vuelva a la primera tras guardar cambios o editar
+        comp_activo_guardado = st.session_state.get("factura_seleccionada_auditoria")
+        idx_fac_sel = 0
+        if comp_activo_guardado:
+            for i_f, op_str in enumerate(opciones_fac):
+                if f"[{comp_activo_guardado}]" in op_str:
+                    idx_fac_sel = i_f
+                    break
 
-        comp_sel = seleccion.split("]")[0].replace("[", "")
+        if "sel_factura_auditoria_box" in st.session_state:
+            if st.session_state["sel_factura_auditoria_box"] not in opciones_fac and idx_fac_sel < len(opciones_fac):
+                st.session_state["sel_factura_auditoria_box"] = opciones_fac[idx_fac_sel]
+
+        seleccion = st.selectbox(
+            "Selecciona una factura para auditar:",
+            opciones_fac,
+            index=idx_fac_sel,
+            key="sel_factura_auditoria_box"
+        )
+
+        comp_sel = seleccion.split("]")[0].replace("[", "").strip()
+        st.session_state["factura_seleccionada_auditoria"] = comp_sel
         fac_sel = df_p[df_p["Comprobante Siigo"] == comp_sel].iloc[0]
         es_aduanero = any(k in fac_sel["Proveedor"].upper() for k in AGENTES_ADUANEROS)
 
@@ -3438,6 +3457,8 @@ with tab_auditoria:
                             df_p.at[m_idx[0], "No Contabilizar"] = True
                             df_p.at[m_idx[0], "Estado Registro"] = "🚫 No Contabilizar (Excluida)"
                             st.session_state["df_procesado"] = df_p
+                        st.session_state["factura_seleccionada_auditoria"] = comp_sel
+                        st.session_state.pop("sel_factura_auditoria_box", None)
                         st.rerun()
                 else:
                     if st.button("✅ Reactivar", key=f"btn_react_indiv_{fac_sel['Comprobante Siigo']}", help="Vuelve a incluirla en la contabilidad"):
@@ -3450,6 +3471,8 @@ with tab_auditoria:
                             cp = df_p.at[m_idx[0], "Comprobante Previo"]
                             df_p.at[m_idx[0], "Estado Registro"] = f"🔴 Ya Registrada ({cp})" if es_r else "⚪ Compra Pendiente"
                             st.session_state["df_procesado"] = df_p
+                        st.session_state["factura_seleccionada_auditoria"] = comp_sel
+                        st.session_state.pop("sel_factura_auditoria_box", None)
                         st.rerun()
 
             st.markdown(f"""
@@ -3645,6 +3668,8 @@ with tab_auditoria:
                         zip_bytes=st.session_state.get("zip_pdfs"),
                         job_id=st.session_state.get("job_actual_id")
                     )
+                    st.session_state["factura_seleccionada_auditoria"] = comp_sel
+                    st.session_state.pop("sel_factura_auditoria_box", None)
                     st.success(f"¡Valores y Cuenta CxP ({cta_clean}) actualizados y asiento recalculado con éxito!")
                     st.rerun()
 
