@@ -821,14 +821,26 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
         "Crédito ($)": base_val if es_nc else 0.0
     })
 
-    # 2. IVA Descontable
+    # 2. IVA Descontable (Servicios / Compras)
     if iva_val > 0:
         asiento_filas.append({
             "Código Cuenta": cta_iva,
-            "Descripción de la Cuenta": f"IVA Descontable (Base: ${base_val:,.0f})",
+            "Descripción de la Cuenta": f"IVA Descontable Servicios (Base: ${base_val:,.0f})" if es_aduanero else f"IVA Descontable (Base: ${base_val:,.0f})",
             "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
             "Débito ($)": 0.0 if es_nc else iva_val,
             "Crédito ($)": iva_val if es_nc else 0.0
+        })
+
+    # 2.B IVA de Importación (Cuenta 240835) - Solo para facturas de importación
+    iva_imp_val = float(fac_sel.get("IVA Importación", 0.0))
+    cta_iva_imp = str(fac_sel.get("Cta IVA Importación") or "240835").strip()
+    if iva_imp_val > 0:
+        asiento_filas.append({
+            "Código Cuenta": cta_iva_imp,
+            "Descripción de la Cuenta": f"IVA de Importación (Cta 240835) - Fac {fac_sel.get('Factura', '')}",
+            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+            "Débito ($)": 0.0 if es_nc else iva_imp_val,
+            "Crédito ($)": iva_imp_val if es_nc else 0.0
         })
 
     tot_ret = round(rfte_val + rica_val, 2)
@@ -861,7 +873,7 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
                 "Débito ($)": 0.0,
                 "Crédito ($)": rica_val
             })
-        saldo_cxp = round(base_val + iva_val, 2)
+        saldo_cxp = round(base_val + iva_val + iva_imp_val, 2)
         asiento_filas.append({
             "Código Cuenta": cta_cxp_usar,
             "Descripción de la Cuenta": f"CxP Proveedor/Agente - Fac {fac_sel.get('Factura', '')}",
@@ -895,7 +907,7 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
                 "Débito ($)": riva_val if es_nc else 0.0,
                 "Crédito ($)": 0.0 if es_nc else riva_val
             })
-        neto_cxp = round(base_val + iva_val - rfte_val - rica_val - riva_val, 2)
+        neto_cxp = round(base_val + iva_val + iva_imp_val - rfte_val - rica_val - riva_val, 2)
         asiento_filas.append({
             "Código Cuenta": cta_cxp_usar,
             "Descripción de la Cuenta": f"Proveedores Nacionales - Fac {fac_sel.get('Factura', '')}",
@@ -928,7 +940,8 @@ def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_n
     tot_agente = float(agente_row.get("Total", 0.0))
     base_propia = float(agente_row.get("Base", 0.0))
     iva_propio = float(agente_row.get("IVA", 0.0))
-    subtotal_propio = round(base_propia + iva_propio, 2)
+    iva_imp_propio = float(agente_row.get("IVA Importación", 0.0))
+    subtotal_propio = round(base_propia + iva_propio + iva_imp_propio, 2)
     saldo_terceros_esperado = round(tot_agente - subtotal_propio, 2)
     
     # Si la factura en Hoja 2 ya cubre el total y no hay terceros asignados
@@ -3489,18 +3502,14 @@ with tab_auditoria:
                         help="Puedes cambiar aquí la cuenta pasivo (ej. 22050505 Agencia Aduana, 23359501 Acreedores/DHL, 22050501 Proveedores)."
                     )
 
-                    # Cuenta de IVA de Importación (SOLO visible y configurable para facturas de importación / aduaneras)
                     es_importacion_factura = es_aduanero or "1465" in str(fac_sel.get("Cta Principal", "")) or "IMPORTACI" in str(fac_sel.get("Categoría", "")).upper()
-                    cta_iva_def = str(fac_sel.get("Cta IVA") or ("240835" if es_importacion_factura else "24081001")).strip()
-                    if es_importacion_factura:
-                        nueva_cta_iva = st.text_input(
-                            "Cuenta IVA de Importación (Cta 240835):",
-                            value=cta_iva_def,
-                            key=f"inp_iva_{fac_sel['Comprobante Siigo']}",
-                            help="Cuenta contable de IVA de Importación (240835 / 24083501) exclusiva para importaciones y agenciamiento aduanero."
-                        )
-                    else:
-                        nueva_cta_iva = cta_iva_def
+                    cta_iva_def = str(fac_sel.get("Cta IVA") or ("24081501" if es_importacion_factura else "24081001")).strip()
+                    nueva_cta_iva = st.text_input(
+                        "Cuenta IVA Servicios / Compras:",
+                        value=cta_iva_def,
+                        key=f"inp_iva_{fac_sel['Comprobante Siigo']}",
+                        help="Cuenta contable de IVA descontable ordinario (ej. 24081501 Servicios o 24081001 Compras)."
+                    )
 
                 with c_mod2:
                     c_v1, c_v2 = st.columns(2)
@@ -3528,8 +3537,33 @@ with tab_auditoria:
                         nueva_base = st.number_input("Base Gravable / Subtotal ($):", value=base_cur_f, step=1000.0, key=f"nb_{fac_sel['Comprobante Siigo']}")
                         nueva_rfte = st.number_input("ReteFuente ($):", value=val_rf_input, step=100.0, key=f"nrf_{fac_sel['Comprobante Siigo']}")
                     with c_v2:
-                        nuevo_iva = st.number_input("IVA Descontable ($):", value=float(fac_sel["IVA"]), step=100.0, key=f"niva_{fac_sel['Comprobante Siigo']}")
+                        lbl_iva_desc = "IVA Servicios ($) (24081501):" if es_importacion_factura else "IVA Descontable ($):"
+                        nuevo_iva = st.number_input(lbl_iva_desc, value=float(fac_sel["IVA"]), step=100.0, key=f"niva_{fac_sel['Comprobante Siigo']}")
                         nuevo_rica = st.number_input("ReteICA ($):", value=val_ri_input, step=100.0, key=f"nri_{fac_sel['Comprobante Siigo']}")
+
+                    # CAMPO DEDICADO: IVA DE IMPORTACIÓN (CUENTA 240835) - SOLO PARA FACTURAS DE IMPORTACIÓN
+                    if es_importacion_factura:
+                        val_iva_imp_actual = float(fac_sel.get("IVA Importación", 0.0))
+                        cta_iva_imp_actual = str(fac_sel.get("Cta IVA Importación") or "240835").strip()
+                        c_imp1, c_imp2 = st.columns(2)
+                        with c_imp1:
+                            nuevo_iva_imp = st.number_input(
+                                "🚢 IVA de Importación ($) (Cta 240835):",
+                                value=val_iva_imp_actual,
+                                step=1000.0,
+                                key=f"niva_imp_val_{fac_sel['Comprobante Siigo']}",
+                                help="Ingresa aquí el valor del IVA pagado en la importación / declaración de aduanas que se imputa a la cuenta 240835."
+                            )
+                        with c_imp2:
+                            cta_iva_imp_cod = st.text_input(
+                                "Cuenta IVA Importación:",
+                                value=cta_iva_imp_actual,
+                                key=f"inp_cta_ivaimp_cod_{fac_sel['Comprobante Siigo']}",
+                                help="Cuenta contable de IVA para importación (por defecto 240835)."
+                            )
+                    else:
+                        nuevo_iva_imp = 0.0
+                        cta_iva_imp_cod = "240835"
 
                 asumir_imp = st.checkbox(
                     "Asumir Impuestos / Retenciones (Cruza con Agente Aduanero / Triangulación)",
@@ -3554,17 +3588,19 @@ with tab_auditoria:
                     df_p.at[r_idx, "Cuenta Pasivo Especifica"] = cta_clean
                     df_p.at[r_idx, "Cta Contrapartida"] = cta_clean
                     df_p.at[r_idx, "Cta Principal"] = nueva_cta_p.split()[0].strip()
-                    cta_iva_clean = nueva_cta_iva.split()[0].strip() if 'nueva_cta_iva' in locals() and nueva_cta_iva else ("240835" if es_importacion_factura else "24081001")
+                    cta_iva_clean = nueva_cta_iva.split()[0].strip() if 'nueva_cta_iva' in locals() and nueva_cta_iva else ("24081501" if es_importacion_factura else "24081001")
                     df_p.at[r_idx, "Cta IVA"] = cta_iva_clean
+                    df_p.at[r_idx, "IVA Importación"] = nuevo_iva_imp
+                    df_p.at[r_idx, "Cta IVA Importación"] = cta_iva_imp_cod.split()[0].strip()
                     df_p.at[r_idx, "Impuestos Asumidos"] = asumir_imp
                     df_p.at[r_idx, "Editada Manualmente"] = True
 
                     if asumir_imp:
-                        saldo_p = round(nueva_base + nuevo_iva, 2)
+                        saldo_p = round(nueva_base + nuevo_iva + nuevo_iva_imp, 2)
                         df_p.at[r_idx, "Neto a Pagar"] = saldo_p
                         df_p.at[r_idx, "Total Neto"] = saldo_p
                     else:
-                        df_p.at[r_idx, "Neto a Pagar"] = round(nueva_base + nuevo_iva - nueva_rfte - nuevo_rica - float(fac_sel.get("ReteIVA", 0.0)), 2)
+                        df_p.at[r_idx, "Neto a Pagar"] = round(nueva_base + nuevo_iva + nuevo_iva_imp - nueva_rfte - nuevo_rica - float(fac_sel.get("ReteIVA", 0.0)), 2)
 
                     st.session_state["df_procesado"] = df_p
 # Asiento de triangulación protegido: no se sobreescribe con asiento estándar
@@ -4304,7 +4340,8 @@ with tab_triangulacion:
                 tot_agente_actual = float(agente_actual.get("Total", 0.0))
                 base_prop_actual = float(agente_actual.get("Base", 0.0))
                 iva_prop_actual = float(agente_actual.get("IVA", 0.0))
-                subtot_prop_actual = round(base_prop_actual + iva_prop_actual, 2)
+                iva_imp_act = float(agente_actual.get("IVA Importación", 0.0))
+                subtot_prop_actual = round(base_prop_actual + iva_prop_actual + iva_imp_act, 2)
                 saldo_terceros_esperado_act = round(tot_agente_actual - subtot_prop_actual, 2)
 
                 # Tratamiento contable y asiento de partida doble del paquete
