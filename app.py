@@ -785,7 +785,7 @@ def analizar_estado_filas_excel(excel_bytes):
     return estados
 
 def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
-    """Genera el asiento contable exacto de una factura tal como se calcula en la Hoja 2 (Auditoría)."""
+    """Genera el asiento contable EXACTO e IDÉNTICO al que visualiza la Hoja 2 (Auditoría)."""
     asiento_filas = []
     es_nc = "Devolucion" in str(fac_sel.get("Operacion", ""))
     asume_ret = bool(fac_sel.get("Impuestos Asumidos", False))
@@ -798,12 +798,13 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
     tot_val = float(fac_sel.get("Total", 0.0))
     rfte_val = float(fac_sel.get("ReteFuente", 0.0))
     rica_val = float(fac_sel.get("ReteICA", 0.0))
+    riva_val = float(fac_sel.get("ReteIVA", 0.0))
 
     # 1. Base / Costo
     asiento_filas.append({
         "Código Cuenta": cta_p,
-        "Descripción Cuenta": f"{fac_sel.get('Categoría', 'Gasto/Costo')} - {str(fac_sel.get('Proveedor', ''))[:25]}",
-        "Tercero / NIT": f"{fac_sel.get('NIT Emisor', '')} - {str(fac_sel.get('Proveedor', ''))[:22]}",
+        "Descripción de la Cuenta": f"{fac_sel.get('Categoría', 'Gasto/Costo')} - {str(fac_sel.get('Proveedor', ''))[:25]}",
+        "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
         "Débito ($)": 0.0 if es_nc else base_val,
         "Crédito ($)": base_val if es_nc else 0.0
     })
@@ -812,8 +813,8 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
     if iva_val > 0:
         asiento_filas.append({
             "Código Cuenta": cta_iva,
-            "Descripción Cuenta": f"IVA Descontable (Base: ${base_val:,.0f})",
-            "Tercero / NIT": f"{fac_sel.get('NIT Emisor', '')} - {str(fac_sel.get('Proveedor', ''))[:22]}",
+            "Descripción de la Cuenta": f"IVA Descontable (Base: ${base_val:,.0f})",
+            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
             "Débito ($)": 0.0 if es_nc else iva_val,
             "Crédito ($)": iva_val if es_nc else 0.0
         })
@@ -823,62 +824,72 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
     cta_ri_usar = str(fac_sel.get("Cta ReteICA") or ("23680505" if es_aduanero else "23680501")).strip()
 
     if asume_ret:
+        # IMPUESTOS ASUMIDOS (Cruza con Agente Aduanero / Triangulación)
         if tot_ret > 0:
             asiento_filas.append({
                 "Código Cuenta": "53152001",
-                "Descripción Cuenta": "Retenciones Asumidas (Impuestos Asumidos Aduana)",
-                "Tercero / NIT": f"{fac_sel.get('NIT Emisor', '')} - {str(fac_sel.get('Proveedor', ''))[:22]}",
+                "Descripción de la Cuenta": "Retenciones Asumidas (Impuestos Asumidos Aduana)",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
                 "Débito ($)": tot_ret,
                 "Crédito ($)": 0.0
             })
         if rfte_val > 0:
             asiento_filas.append({
                 "Código Cuenta": cta_rf_usar,
-                "Descripción Cuenta": f"ReteFuente Practicada ({cta_rf_usar}) Fac {fac_sel.get('Factura', '')}",
-                "Tercero / NIT": f"{fac_sel.get('NIT Emisor', '')} - {str(fac_sel.get('Proveedor', ''))[:22]}",
+                "Descripción de la Cuenta": f"ReteFuente Practicada ({cta_rf_usar}) Fac {fac_sel.get('Factura', '')}",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
                 "Débito ($)": 0.0,
                 "Crédito ($)": rfte_val
             })
         if rica_val > 0:
             asiento_filas.append({
                 "Código Cuenta": cta_ri_usar,
-                "Descripción Cuenta": f"Retención ICA Practicada ({cta_ri_usar}) Fac {fac_sel.get('Factura', '')}",
-                "Tercero / NIT": f"{fac_sel.get('NIT Emisor', '')} - {str(fac_sel.get('Proveedor', ''))[:22]}",
+                "Descripción de la Cuenta": "Retención ICA Practicada",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
                 "Débito ($)": 0.0,
                 "Crédito ($)": rica_val
             })
         saldo_cxp = round(base_val + iva_val, 2)
         asiento_filas.append({
             "Código Cuenta": cta_cxp_usar,
-            "Descripción Cuenta": f"CxP Proveedor/Agente - Fac {fac_sel.get('Factura', '')}",
-            "Tercero / NIT": f"{fac_sel.get('NIT Emisor', '')} - {str(fac_sel.get('Proveedor', ''))[:22]}",
+            "Descripción de la Cuenta": f"CxP Proveedor/Agente - Fac {fac_sel.get('Factura', '')}",
+            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
             "Débito ($)": saldo_cxp if es_nc else 0.0,
             "Crédito ($)": 0.0 if es_nc else saldo_cxp
         })
     else:
+        # RETENCIONES ORDINARIAS PRACTICADAS AL PROVEEDOR
         if rfte_val > 0:
             asiento_filas.append({
                 "Código Cuenta": cta_rf_usar,
-                "Descripción Cuenta": f"ReteFuente Practicada ({cta_rf_usar}) Fac {fac_sel.get('Factura', '')}",
-                "Tercero / NIT": f"{fac_sel.get('NIT Emisor', '')} - {str(fac_sel.get('Proveedor', ''))[:22]}",
-                "Débito ($)": 0.0,
-                "Crédito ($)": rfte_val
+                "Descripción de la Cuenta": f"ReteFuente Practicada ({fac_sel.get('Categoría', 'Compras/Servicios')})",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                "Débito ($)": rfte_val if es_nc else 0.0,
+                "Crédito ($)": 0.0 if es_nc else rfte_val
             })
         if rica_val > 0:
             asiento_filas.append({
                 "Código Cuenta": cta_ri_usar,
-                "Descripción Cuenta": f"Retención ICA Practicada ({cta_ri_usar}) Fac {fac_sel.get('Factura', '')}",
-                "Tercero / NIT": f"{fac_sel.get('NIT Emisor', '')} - {str(fac_sel.get('Proveedor', ''))[:22]}",
-                "Débito ($)": 0.0,
-                "Crédito ($)": rica_val
+                "Descripción de la Cuenta": "Retención ICA Practicada",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                "Débito ($)": rica_val if es_nc else 0.0,
+                "Crédito ($)": 0.0 if es_nc else rica_val
             })
-        saldo_neto = round(base_val + iva_val - tot_ret, 2)
+        if riva_val > 0:
+            asiento_filas.append({
+                "Código Cuenta": "23670101",
+                "Descripción de la Cuenta": "Retención de IVA Practicada (15%)",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                "Débito ($)": riva_val if es_nc else 0.0,
+                "Crédito ($)": 0.0 if es_nc else riva_val
+            })
+        neto_cxp = round(base_val + iva_val - rfte_val - rica_val - riva_val, 2)
         asiento_filas.append({
             "Código Cuenta": cta_cxp_usar,
-            "Descripción Cuenta": f"CxP Proveedor/Agente - Fac {fac_sel.get('Factura', '')}",
-            "Tercero / NIT": f"{fac_sel.get('NIT Emisor', '')} - {str(fac_sel.get('Proveedor', ''))[:22]}",
-            "Débito ($)": saldo_neto if es_nc else 0.0,
-            "Crédito ($)": 0.0 if es_nc else saldo_neto
+            "Descripción de la Cuenta": f"Proveedores Nacionales - Fac {fac_sel.get('Factura', '')}",
+            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+            "Débito ($)": neto_cxp if es_nc else 0.0,
+            "Crédito ($)": 0.0 if es_nc else neto_cxp
         })
 
     return pd.DataFrame(asiento_filas)
@@ -4121,7 +4132,17 @@ with tab_triangulacion:
                 paquete_activo = pqs_actuales[pq_id_sel]
                 agente_actual = paquete_activo["agente"]
                 terceros_actual = paquete_activo["terceros"]
-                tot_agente_actual = float(agente_actual["Total"])
+
+                # Sincronización en tiempo real: refrescar datos del agente desde df_procesado (Hoja 2)
+                if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
+                    df_pr_act = st.session_state["df_procesado"]
+                    ag_fac_cur = str(agente_actual["Factura"]).strip()
+                    m_ag = df_pr_act[df_pr_act["Factura"].astype(str).str.strip() == ag_fac_cur]
+                    if not m_ag.empty:
+                        agente_actual = m_ag.iloc[0].to_dict()
+                        paquete_activo["agente"] = agente_actual
+
+                tot_agente_actual = float(agente_actual.get("Total", 0.0))
 
                 # Tratamiento contable y asiento de partida doble del paquete
                 enviar_h2_activo = bool(st.session_state.get(f"enviar_h2_pq_{pq_id_sel}", False))
@@ -4314,8 +4335,22 @@ with tab_triangulacion:
                 else:
                     st.warning(f"⚠️ El Paquete #{pq_id_sel} no tiene facturas de terceros asignadas todavía.")
 
-            # Expander para agregar/quitar facturas manualmente a este paquete
-            with st.expander(f"⚙️ Modificar este Paquete #{pq_id_sel} (Sacar Facturas o Agregar Nuevas):", expanded=False):
+            # Expander para agregar/quitar facturas manualmente a este paquete (BLOQUEADO SI ESTÁ VALIDADO)
+            es_validado_este = st.session_state.get(f"paquete_listo_{pq_id_sel}", False)
+            if es_validado_este:
+                st.markdown(f"""
+                <div style="background:#f0fdf4; border:1px solid #86efac; border-left:5px solid #16a34a; border-radius:8px; padding:12px 16px; margin:12px 0;">
+                    <h5 style="margin:0 0 4px 0; color:#166534;">🔒 Paquete #{pq_id_sel} VALIDADO Y BLOQUEADO</h5>
+                    <p style="margin:0; color:#14532d; font-size:13.5px;">
+                        Este paquete se encuentra congelado. Ninguna factura puede ser añadida ni retirada mientras esté validado. Para realizar modificaciones, presiona <b>'🔓 Desbloquear y Modificar'</b> abajo.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with st.expander(f"⚙️ Modificar este Paquete #{pq_id_sel} (Sacar Facturas o Agregar Nuevas):", expanded=False if es_validado_este else False):
+                if es_validado_este:
+                    st.warning("⚠️ Debes desbloquear el paquete abajo antes de poder agregar o sacar facturas.")
+                    st.stop()
                 st.caption("Administra las facturas asignadas a esta importación: saca las que no correspondan o añade nuevas facturas de DHL, Agencia o Garaje:")
                 
                 # 1. SECCIÓN PARA SACAR / REDIRIGIR FACTURAS
@@ -4341,7 +4376,7 @@ with tab_triangulacion:
                         fac_nom_mover = fila_a_mover["Factura"]
                         sc_mover = float(fila_a_mover.get("Total Neto", 0.0)) or (float(fila_a_mover.get("Base", 0.0)) + float(fila_a_mover.get("IVA", 0.0)))
                         
-                        otros_pqs = [p for p in pqs_actuales.keys() if p != pq_id_sel]
+                        otros_pqs = [p for p in pqs_actuales.keys() if p != pq_id_sel and not st.session_state.get(f"paquete_listo_{p}", False)]
                         
                         # Calcular cuál otro paquete tiene un faltante más cercano a esta factura
                         mejor_pq_sug = None
