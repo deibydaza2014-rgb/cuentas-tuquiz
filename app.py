@@ -892,7 +892,12 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
             "Crédito ($)": 0.0 if es_nc else neto_cxp
         })
 
-    return pd.DataFrame(asiento_filas)
+    df_h2 = pd.DataFrame(asiento_filas)
+    if "Descripción de la Cuenta" in df_h2.columns and "Descripción Cuenta" not in df_h2.columns:
+        df_h2["Descripción Cuenta"] = df_h2["Descripción de la Cuenta"]
+    elif "Descripción Cuenta" in df_h2.columns and "Descripción de la Cuenta" not in df_h2.columns:
+        df_h2["Descripción de la Cuenta"] = df_h2["Descripción Cuenta"]
+    return df_h2
 
 def generar_asiento_triangulacion_paquete(agente_row, terceros_df, enviar_a_no_deducible=False, enviar_a_gastos_propios=False, enviar_a_hoja2=False, **kwargs):
     """
@@ -1024,6 +1029,10 @@ def generar_asiento_triangulacion_paquete(agente_row, terceros_df, enviar_a_no_d
     })
 
     df_asiento = pd.DataFrame(asiento)
+    if "Descripción Cuenta" in df_asiento.columns and "Descripción de la Cuenta" not in df_asiento.columns:
+        df_asiento["Descripción de la Cuenta"] = df_asiento["Descripción Cuenta"]
+    elif "Descripción de la Cuenta" in df_asiento.columns and "Descripción Cuenta" not in df_asiento.columns:
+        df_asiento["Descripción Cuenta"] = df_asiento["Descripción de la Cuenta"]
     return df_asiento, max(0.0, diferencia_no_deducible), suma_ret_asumidas
 
 # Directorio oficial de regímenes fiscales conocidos por NIT y Nombre
@@ -4687,7 +4696,7 @@ with tab_triangulacion:
                         "Fecha Operación": ag_item["Fecha"],
                         "Código Cuenta": fila_as["Código Cuenta"],
                         "Tercero / NIT": fila_as["Tercero / NIT"],
-                        "Descripción": fila_as["Descripción Cuenta"],
+                        "Descripción": str(fila_as.get("Descripción de la Cuenta") or fila_as.get("Descripción Cuenta") or fila_as.get("Descripción") or ""), 
                         "Débito ($)": fila_as["Débito ($)"],
                         "Crédito ($)": fila_as["Crédito ($)"]
                     })
@@ -5030,7 +5039,7 @@ with tab_siigo:
                     nit_terc_clean = re.sub(r'\D', '', str(f_as["Tercero / NIT"]).split("-")[0])
                     deb_val = float(f_as["Débito ($)"])
                     cred_val = float(f_as["Crédito ($)"])
-                    desc_linea = f_as["Descripción Cuenta"][:40]
+                    desc_linea = str(f_as.get("Descripción de la Cuenta") or f_as.get("Descripción Cuenta") or f_as.get("Descripción") or "")[:40]
 
                     ws_interfaz.append([
                         14,  # Tipo de Comprobante: 14 (Nota de Contabilidad / Cruces)
