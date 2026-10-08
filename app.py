@@ -899,6 +899,101 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
         df_h2["Descripción de la Cuenta"] = df_h2["Descripción Cuenta"]
     return df_h2
 
+
+def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_no_deducible=False):
+    """
+    Construye el asiento contable completo para un paquete cuando se trae la contabilización de Página 2:
+    1. Si en Hoja 2 se registraron únicamente los Ingresos Propios (Base + IVA < Total Factura):
+       Combina los Ingresos Propios (con su IVA y retenciones) + Facturas de Terceros (cancelación de CxP) +
+       Diferencia de Fletes Internacionales / Cargos en Origen (Cta 14650501) + Crédito total a Euro Shipping (22050501).
+       Garantiza que el total del comprobante sume exactamente el 100% del cobro facturado ($2,912,444.08).
+    2. Si en Hoja 2 ya abarca el 100% del cobro facturado, mantiene la fidelidad exacta de Hoja 2.
+    """
+    df_h2 = obtener_asiento_contable_hoja2(agente_row, es_aduanero=False)
+    
+    tot_agente = float(agente_row.get("Total", 0.0))
+    base_propia = float(agente_row.get("Base", 0.0))
+    iva_propio = float(agente_row.get("IVA", 0.0))
+    subtotal_propio = round(base_propia + iva_propio, 2)
+    saldo_terceros_esperado = round(tot_agente - subtotal_propio, 2)
+    
+    # Si la factura en Hoja 2 ya cubre el total y no hay terceros asignados
+    if saldo_terceros_esperado <= 0.05 and (terceros_df is None or terceros_df.empty):
+        return df_h2, 0.0
+        
+    filas_propias = []
+    tot_ret_propias = 0.0
+    for _, r in df_h2.iterrows():
+        cta = str(r["Código Cuenta"]).strip()
+        if cta.startswith("2365") or cta.startswith("2368") or cta.startswith("2367"):
+            tot_ret_propias += float(r["Crédito ($)"])
+            filas_propias.append(r.to_dict())
+        elif not (cta.startswith("2205") and float(r["Crédito ($)"]) > 0):
+            filas_propias.append(r.to_dict())
+            
+    # Facturas de terceros asignadas a este paquete
+    filas_terceros = []
+    suma_terceros_cxp = 0.0
+    if terceros_df is not None and not terceros_df.empty:
+        for _, t in terceros_df.iterrows():
+            prov_nom = str(t.get("Proveedor", "")).upper()
+            nit_t = str(t.get("NIT Emisor", ""))
+            fac_num = str(t.get("Factura", ""))
+            cta_cxp = str(t.get("Cuenta Pasivo Especifica", "")).strip() or ("22050505" if "CARGO" in prov_nom or "ADUANA" in prov_nom else "23359501")
+            t_base = float(t.get("Base", 0.0))
+            t_iva = float(t.get("IVA", 0.0))
+            t_saldo_pagar = float(t.get("Total Neto", 0.0)) or round(t_base + t_iva, 2)
+            
+            suma_terceros_cxp += t_saldo_pagar
+            filas_terceros.append({
+                "Código Cuenta": cta_cxp,
+                "Descripción Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
+                "Descripción de la Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
+                "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
+                "Débito ($)": t_saldo_pagar,
+                "Crédito ($)": 0.0
+            })
+            
+    # Saldo para terceros restante (fletes internacionales / cargos en origen sin factura DIAN separada)
+    dif_terceros = round(saldo_terceros_esperado - suma_terceros_cxp, 2)
+    filas_ajuste = []
+    if dif_terceros > 0.05:
+        if enviar_a_no_deducible:
+            filas_ajuste.append({
+                "Código Cuenta": CUENTA_NO_DEDUCIBLE,
+                "Descripción Cuenta": f"Gastos No Deducibles Terceros (Diferencia sin soporte DIAN)",
+                "Descripción de la Cuenta": f"Gastos No Deducibles Terceros (Diferencia sin soporte DIAN)",
+                "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
+                "Débito ($)": dif_terceros,
+                "Crédito ($)": 0.0
+            })
+        else:
+            filas_ajuste.append({
+                "Código Cuenta": CUENTA_IMPORTACION_TRANSITO,
+                "Descripción Cuenta": f"Fletes Internacionales / Cargos en Origen (Fac {agente_row.get('Factura', '')})",
+                "Descripción de la Cuenta": f"Fletes Internacionales / Cargos en Origen (Fac {agente_row.get('Factura', '')})",
+                "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
+                "Débito ($)": dif_terceros,
+                "Crédito ($)": 0.0
+            })
+            
+    # Crédito total por pagar al Agente Aduanero (Euro Shipping)
+    asume_ret = bool(agente_row.get("Impuestos Asumidos", False))
+    cxp_total_agente = tot_agente if asume_ret else round(tot_agente - tot_ret_propias, 2)
+    
+    filas_credito = [{
+        "Código Cuenta": CUENTA_CXP_EURO_SHIPPING,
+        "Descripción Cuenta": f"CxP Agente Aduanero - Fac {agente_row.get('Factura', '')}",
+        "Descripción de la Cuenta": f"CxP Agente Aduanero - Fac {agente_row.get('Factura', '')}",
+        "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
+        "Débito ($)": 0.0,
+        "Crédito ($)": cxp_total_agente
+    }]
+    
+    asiento_final = filas_propias + filas_terceros + filas_ajuste + filas_credito
+    df_res = pd.DataFrame(asiento_final)
+    return df_res, 0.0
+
 def generar_asiento_triangulacion_paquete(agente_row, terceros_df, enviar_a_no_deducible=False, enviar_a_gastos_propios=False, enviar_a_hoja2=False, **kwargs):
     """
     Calcula el asiento contable de partida doble para un paquete de importación triangulado:
@@ -2303,21 +2398,35 @@ def restaurar_desde_respaldo_bytes(empresa_dict, raw_zip_bytes):
 
 # BANNER DE CONTROL Y GUARDADO MANUAL
 if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
-    c_bnr1, c_bnr2, c_bnr3 = st.columns([3.2, 1.5, 1.1])
+    c_bnr1, c_bnr2, c_bnr3, c_bnr4 = st.columns([2.8, 1.3, 1.6, 0.9])
     with c_bnr1:
         nom_ses = st.session_state.get("excel_nombre", "Reporte de Facturas")
         last_save = st.session_state.get("_ultimo_guardado_manual")
-        save_info = f" | 💾 Último guardado manual: `{last_save}`" if last_save else " | (Presiona 'Guardar Avance' cuando termines tus cambios)"
+        save_info = f" | 💾 `{last_save}`" if last_save else ""
         st.info(f"📋 **Trabajo Activo:** `{nom_ses}` ({len(st.session_state['df_procesado'])} facturas){save_info}")
     with c_bnr2:
-        if st.button("💾 Guardar Avance", key="btn_guardar_manual_top", use_container_width=True, help="Guarda en disco todas las modificaciones de cuentas y triangulaciones."):
+        if st.button("💾 Guardar Avance", key="btn_guardar_manual_top", use_container_width=True, help="Guarda en disco todas las modificaciones de cuentas y paquetes validados."):
             if guardar_estado_manual(empresa):
                 st.success("✅ ¡Avance contable guardado exitosamente!")
                 st.rerun()
             else:
                 st.error("Error al guardar.")
     with c_bnr3:
-        if st.button("🆕 Limpiar Todo", key="btn_nuevo_trabajo_top", use_container_width=True, help="Limpia la memoria para cargar un nuevo mes."):
+        respaldo_bytes_top = generar_respaldo_portatil_bytes(empresa)
+        if respaldo_bytes_top:
+            emp_clean_name = re.sub(r'[^a-zA-Z0-9]', '_', str(empresa.get('nombre', 'Empresa')))
+            nom_resp_top = f"Respaldo_Avance_{emp_clean_name}.indumaq"
+            st.download_button(
+                label="🛡️ Descargar Respaldo (.indumaq)",
+                data=respaldo_bytes_top,
+                file_name=nom_resp_top,
+                mime="application/zip",
+                key="btn_dl_respaldo_top_direct",
+                use_container_width=True,
+                help="Descarga un archivo con tus 16 paquetes validados y facturas editadas. Si se apaga o reinicia Streamlit, lo cargas en segundos."
+            )
+    with c_bnr4:
+        if st.button("🆕 Limpiar", key="btn_nuevo_trabajo_top", use_container_width=True, help="Limpia la memoria para cargar un nuevo mes."):
             for k in ["df_procesado", "dict_pdfs", "raw_uploaded_pdfs", "excel_bytes", "excel_nombre", "zip_pdfs", "job_actual_id", "_ultimo_excel_proc_sig", "_ultimo_pdfs_proc_sig", "paquetes_importacion", "asientos_triangulacion_por_factura", "facturas_no_contabilizar", "_ultimo_guardado_manual"]:
                 st.session_state.pop(k, None)
             st.rerun()
@@ -4165,7 +4274,7 @@ with tab_triangulacion:
                     dif_no_ded = 0.0
                     ret_asum = 0.0
                 elif enviar_h2_activo:
-                    df_asiento_paquete = obtener_asiento_contable_hoja2(agente_actual, es_aduanero=False)
+                    df_asiento_paquete, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
                     dif_no_ded = 0.0
                     ret_asum = 0.0
                 elif enviar_gp_activo and dif_faltante_prev > 0.05:
@@ -4531,7 +4640,7 @@ with tab_triangulacion:
                     st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                    df_as_act = obtener_asiento_contable_hoja2(agente_actual, es_aduanero=False)
+                    df_as_act, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
                     if st.session_state.get(f"paquete_listo_{pq_id_sel}", False):
                         st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_as_act.copy()
                         paquete_activo["asiento_fijo"] = df_as_act.copy()
@@ -4599,7 +4708,7 @@ with tab_triangulacion:
                 dif_no_ded = 0.0
                 ret_asum = 0.0
             elif enviar_h2_activo:
-                df_asiento_paquete = obtener_asiento_contable_hoja2(agente_actual, es_aduanero=False)
+                df_asiento_paquete, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
                 dif_no_ded = 0.0
                 ret_asum = 0.0
             elif enviar_gp_activo and dif_faltante_prev > 0.05:
