@@ -1,4 +1,4 @@
-import pickle
+import pickle 
 import shutil
 import json
 import base64
@@ -4596,6 +4596,18 @@ with tab_triangulacion:
                 st.markdown("---")
                 
                 # 2. SECCIÓN PARA AGREGAR NUEVAS FACTURAS
+                cands_disp_agregar = df_terceros_all.copy()
+                
+                # RESTRICCIÓN DE BLOQUEO: Las facturas de paquetes ya validados no se pueden añadir a otros
+                facturas_bloqueadas_validadas = set()
+                if "paquetes_importacion" in st.session_state:
+                    for p_k_v, p_dat_v in st.session_state["paquetes_importacion"].items():
+                        if st.session_state.get(f"paquete_listo_{p_k_v}", False):
+                            df_t_val = p_dat_v.get("terceros")
+                            if df_t_val is not None and not df_t_val.empty:
+                                for f_asig in df_t_val["Factura"].dropna():
+                                    facturas_bloqueadas_validadas.add(str(f_asig).strip())
+
                 # 2.1 SUGERENCIAS INTELIGENTES DE FACTURAS PARA INGRESOS DE TERCEROS
                 if dif_faltante_prev > 0.05:
                     st.markdown(
@@ -4733,20 +4745,8 @@ with tab_triangulacion:
                     st.markdown("---")
 
                 st.markdown("##### ➕ Añadir Manualmente otra Factura Libre a este paquete:")
-                # Facturas de terceros disponibles (tanto de df_terceros_all como de df_total no asignadas)
                 opciones_agregar = []
                 mapa_agregar = {}
-                cands_disp_agregar = df_terceros_all.copy()
-                
-                # RESTRICCIÓN DE BLOQUEO: Las facturas de paquetes ya validados no se pueden añadir a otros
-                facturas_bloqueadas_validadas = set()
-                if "paquetes_importacion" in st.session_state:
-                    for p_k_v, p_dat_v in st.session_state["paquetes_importacion"].items():
-                        if st.session_state.get(f"paquete_listo_{p_k_v}", False):
-                            df_t_val = p_dat_v.get("terceros")
-                            if df_t_val is not None and not df_t_val.empty:
-                                for f_asig in df_t_val["Factura"].dropna():
-                                    facturas_bloqueadas_validadas.add(str(f_asig).strip())
 
                 for _, tr_cand in cands_disp_agregar.iterrows():
                     f_cand_num = str(tr_cand["Factura"]).strip()
