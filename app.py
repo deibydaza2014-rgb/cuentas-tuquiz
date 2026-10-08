@@ -4366,6 +4366,11 @@ with tab_triangulacion:
                     # Traslado y actualización inmediata a df_procesado (Página 2)
                     if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
                         df_pr = st.session_state["df_procesado"]
+                        for c_col in ["Paquete Validado", "Destino Siigo", "Cruza Con Agente", "Estado Registro"]:
+                            if c_col in df_pr.columns:
+                                df_pr[c_col] = df_pr[c_col].astype(object)
+                            else:
+                                df_pr[c_col] = None
                         idx_ag = df_pr[df_pr["Factura"].astype(str).str.strip() == ag_fac_str].index
                         if not idx_ag.empty:
                             if pasa_a_siigo:
@@ -4405,10 +4410,15 @@ with tab_triangulacion:
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
                     if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
                         df_pr = st.session_state["df_procesado"]
+                        for c_col in ["Paquete Validado", "Destino Siigo", "Cruza Con Agente", "Estado Registro"]:
+                            if c_col in df_pr.columns:
+                                df_pr[c_col] = df_pr[c_col].astype(object)
+                            else:
+                                df_pr[c_col] = None
                         idx_ag = df_pr[df_pr["Factura"].astype(str).str.strip() == ag_fac_str].index
                         if not idx_ag.empty:
                             df_pr.at[idx_ag[0], "Estado Registro"] = "🟡 Agente Aduanero"
-                            df_pr.at[idx_ag[0], "Paquete Validado"] = ""
+                            df_pr.at[idx_ag[0], "Paquete Validado"] = None
                             df_pr.at[idx_ag[0], "Destino Siigo"] = None
                         if not terceros_actual.empty:
                             for _, tr_row in terceros_actual.iterrows():
@@ -4418,8 +4428,8 @@ with tab_triangulacion:
                                     es_r = bool(df_pr.at[idx_t[0], "Ya Registrada"]) or bool(df_pr.at[idx_t[0], "No Contabilizar"])
                                     cp = df_pr.at[idx_t[0], "Comprobante Previo"]
                                     df_pr.at[idx_t[0], "Estado Registro"] = f"🔴 Ya Registrada ({cp})" if es_r else "⚪ Compra Pendiente"
-                                    df_pr.at[idx_t[0], "Paquete Validado"] = ""
-                                    df_pr.at[idx_t[0], "Cruza Con Agente"] = ""
+                                    df_pr.at[idx_t[0], "Paquete Validado"] = None
+                                    df_pr.at[idx_t[0], "Cruza Con Agente"] = None
                         st.session_state["df_procesado"] = df_pr
                     guardar_estado_manual(empresa)
 
