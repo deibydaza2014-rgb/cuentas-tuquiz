@@ -4659,6 +4659,7 @@ with tab_triangulacion:
                 
                 # 2. SECCIÓN PARA AGREGAR NUEVAS FACTURAS
                 cands_disp_agregar = df_terceros_all.copy()
+                f_ag_dt_sug = pd.to_datetime(agente_actual.get("Fecha", ""), dayfirst=True, errors="coerce")
                 
                 # RESTRICCIÓN DE BLOQUEO: Las facturas de paquetes ya validados no se pueden añadir a otros
                 facturas_bloqueadas_validadas = set()
