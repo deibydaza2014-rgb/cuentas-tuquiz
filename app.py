@@ -925,6 +925,46 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
     return df_h2
 
 
+def obtener_saldo_cruce_factura(tr):
+    """
+    Calcula de forma segura el Saldo de Cruce (Base + IVA) de una factura para la triangulación,
+    garantizando que nunca retorne None ni NaN.
+    """
+    try:
+        tb = float(tr.get("Base", 0.0)) if pd.notna(tr.get("Base")) else (float(tr.get("Subtotal", 0.0)) if pd.notna(tr.get("Subtotal")) else 0.0)
+    except Exception:
+        tb = 0.0
+    try:
+        tiv = float(tr.get("IVA", 0.0)) if pd.notna(tr.get("IVA")) else 0.0
+    except Exception:
+        tiv = 0.0
+    try:
+        t_imp = float(tr.get("IVA Importación", 0.0)) if pd.notna(tr.get("IVA Importación")) else 0.0
+    except Exception:
+        t_imp = 0.0
+
+    val_neto = tr.get("Total Neto")
+    if val_neto is not None and pd.notna(val_neto) and str(val_neto).strip() not in ["", "nan", "None", "0", "0.0"]:
+        try:
+            f_neto = float(val_neto)
+            if f_neto > 0.0 and not pd.isna(f_neto):
+                return round(f_neto, 2)
+        except Exception:
+            pass
+
+    saldo_calc = round(tb + tiv + t_imp, 2)
+    if saldo_calc > 0.0:
+        return saldo_calc
+
+    try:
+        tot = float(tr.get("Total", 0.0)) if pd.notna(tr.get("Total")) else 0.0
+        if tot > 0.0 and not pd.isna(tot):
+            return round(tot, 2)
+    except Exception:
+        pass
+    return 0.0
+
+
 def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_no_deducible=False, imputar_a_transito=False):
     """
     Construye el asiento contable para un cobro de agente cuando se trae la contabilización de Página 2:
@@ -970,7 +1010,7 @@ def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_n
             cta_cxp = str(t.get("Cuenta Pasivo Especifica", "")).strip() or ("22050505" if "CARGO" in prov_nom or "ADUANA" in prov_nom else "23359501")
             t_base = float(t.get("Base", 0.0))
             t_iva = float(t.get("IVA", 0.0))
-            t_saldo_pagar = float(t.get("Total Neto", 0.0)) or round(t_base + t_iva, 2)
+            t_saldo_pagar = obtener_saldo_cruce_factura(t)
             
             suma_terceros_cxp += t_saldo_pagar
             filas_terceros.append({
@@ -1070,9 +1110,7 @@ def generar_asiento_triangulacion_paquete(agente_row, terceros_df, enviar_a_no_d
         tot_ret = round(rfte_t + rica_t, 2)
         
         # El Saldo por Pagar que entra a la triangulación es Base + IVA (ej. .388.770 + 63.169 = .651.939)
-        t_saldo_pagar = float(t.get("Total Neto", 0.0))
-        if t_saldo_pagar <= 0:
-            t_saldo_pagar = round(t_base + t_iva, 2)
+        t_saldo_pagar = obtener_saldo_cruce_factura(t)
             
         # REGLA DE TRIANGULACIÓN: Toda factura de tercero traída a la triangulación ÚNICAMENTE
         # aporta su Cuenta por Pagar (pasivo: 22050505 Agencia, 23359501 DHL, etc.) por su Saldo por Pagar (Base + IVA),
@@ -3886,7 +3924,7 @@ with tab_auditoria:
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
-                saldo_cruce_ind = float(fac_sel.get("Total Neto", 0.0)) or round(float(fac_sel.get("Base", 0.0)) + float(fac_sel.get("IVA", 0.0)), 2)
+                saldo_cruce_ind = obtener_saldo_cruce_factura(fac_sel)
                 asiento_filas = [
                     {
                         "Código Cuenta": cta_cxp_usar,
@@ -4085,7 +4123,7 @@ with tab_triangulacion:
                     for c_idx_k, c_row_k in cands_i.iterrows():
                         tb_k = float(c_row_k.get("Base", 0.0))
                         tiv_k = float(c_row_k.get("IVA", 0.0))
-                        sc_k = float(c_row_k.get("Total Neto", 0.0)) or (tb_k + tiv_k if tb_k > 0 else float(c_row_k.get("Total", 0.0)))
+                        sc_k = obtener_saldo_cruce_factura(c_row_k)
                         p_u_k = str(c_row_k["Proveedor"]).upper()
                         rol_k = "DHL" if "DHL" in p_u_k else ("AGENCIA" if any(k in p_u_k for k in ["CARGO", "ADUANA"]) else "GARAJE")
                         
@@ -4242,7 +4280,7 @@ with tab_triangulacion:
                             df_t_filtrado = df_t_chk[~mask_ya_en_val].copy().reset_index(drop=True)
                             pqs_actuales[p_k_chk]["terceros"] = df_t_filtrado
                             tot_ag_c = float(p_v_chk["agente"]["Total"])
-                            tot_terc_c = sum([float(r.get("Total Neto", 0.0) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0)))) for _, r in df_t_filtrado.iterrows()])
+                            tot_terc_c = sum([obtener_saldo_cruce_factura(r) for _, r in df_t_filtrado.iterrows()])
                             pqs_actuales[p_k_chk]["diferencia"] = abs(tot_ag_c - tot_terc_c)
                             hubo_cambio_purga = True
 
@@ -4261,7 +4299,7 @@ with tab_triangulacion:
                     p_data = pqs_actuales[p_num]
                     ag_t = p_data["agente"]
                     n_terc = len(p_data["terceros"])
-                    s_terc = sum([float(r.get("Total Neto", 0.0) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0)))) for _, r in p_data["terceros"].iterrows()])
+                    s_terc = sum([obtener_saldo_cruce_factura(r) for _, r in p_data["terceros"].iterrows()])
                     es_val_p = st.session_state.get(f"paquete_listo_{p_num}", False)
                     lock_icon = "🔒 [VALIDADO] " if es_val_p else ""
                     mapa_pqs_titulos[p_num] = f"{lock_icon}📦 Paquete #{p_num}: {ag_t['Proveedor'][:16]} ({ag_t['Factura']}) — Cobro: ${ag_t['Total']:,.0f} | {n_terc} Facturas Terceros (${s_terc:,.0f})"
@@ -4301,7 +4339,7 @@ with tab_triangulacion:
                 enviar_gp_activo = bool(st.session_state.get(f"enviar_gp_pq_{pq_id_sel}", False))
                 enviar_nd_activo = bool(st.session_state.get(f"enviar_nd_pq_{pq_id_sel}", False))
 
-                suma_terceros_cxp_act = sum([float(r.get("Total Neto", 0.0)) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0))) for _, r in terceros_actual.iterrows()]) if (terceros_actual is not None and not terceros_actual.empty) else 0.0
+                suma_terceros_cxp_act = sum([obtener_saldo_cruce_factura(r) for _, r in terceros_actual.iterrows()]) if (terceros_actual is not None and not terceros_actual.empty) else 0.0
 
                 if saldo_terceros_esperado_act > 0.05:
                     dif_faltante_prev = max(0.0, round(saldo_terceros_esperado_act - suma_terceros_cxp_act, 2))
@@ -4505,9 +4543,9 @@ with tab_triangulacion:
                     for _, tr in terceros_actual.iterrows():
                         es_r = tr.get("Ya Registrada", False)
                         badge_est = f"🔴 Ya en Siigo ({tr.get('Comprobante Previo', '10-Prev')})" if es_r else "⚪ No Contabilizada (Pendiente)"
-                        t_b = float(tr.get("Base", 0.0))
-                        t_iv = float(tr.get("IVA", 0.0))
-                        s_cruce = float(tr.get("Total Neto", 0.0)) or round(t_b + t_iv, 2)
+                        t_b = float(tr.get("Base", 0.0)) if pd.notna(tr.get("Base")) else 0.0
+                        t_iv = float(tr.get("IVA", 0.0)) if pd.notna(tr.get("IVA")) else 0.0
+                        s_cruce = obtener_saldo_cruce_factura(tr)
                         tot_s_terceros += s_cruce
                         cta_actual_tr = str(tr.get("Cuenta Pasivo Especifica", "22050505" if "CARGO" in str(tr["Proveedor"]).upper() else "23359501")).strip()
                         p_nom = str(tr["Proveedor"]).upper()
@@ -4568,7 +4606,7 @@ with tab_triangulacion:
                     for _, tr_k in terceros_actual.iterrows():
                         tb_k = float(tr_k.get("Base", 0.0))
                         tiv_k = float(tr_k.get("IVA", 0.0))
-                        sc_k = float(tr_k.get("Total Neto", 0.0)) or round(tb_k + tiv_k, 2)
+                        sc_k = obtener_saldo_cruce_factura(tr_k)
                         tag_q = f"[{tr_k['Factura']}] {tr_k['Proveedor'][:24]} (Saldo: ${sc_k:,.2f})"
                         opciones_quitar.append(tag_q)
                         mapa_quitar_row[tag_q] = tr_k
@@ -4578,7 +4616,7 @@ with tab_triangulacion:
                     if sel_para_quitar != "(Seleccionar...)":
                         fila_a_mover = mapa_quitar_row[sel_para_quitar]
                         fac_nom_mover = fila_a_mover["Factura"]
-                        sc_mover = float(fila_a_mover.get("Total Neto", 0.0)) or (float(fila_a_mover.get("Base", 0.0)) + float(fila_a_mover.get("IVA", 0.0)))
+                        sc_mover = obtener_saldo_cruce_factura(fila_a_mover)
                         
                         otros_pqs = [p for p in pqs_actuales.keys() if p != pq_id_sel and not st.session_state.get(f"paquete_listo_{p}", False)]
                         
@@ -4588,7 +4626,7 @@ with tab_triangulacion:
                         for p_cand_id in otros_pqs:
                             p_cand = pqs_actuales[p_cand_id]
                             tot_ag_c = float(p_cand["agente"]["Total"])
-                            tot_terc_c = sum([float(r.get("Total Neto", 0.0) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0)))) for _, r in p_cand["terceros"].iterrows()])
+                            tot_terc_c = sum([obtener_saldo_cruce_factura(r) for _, r in p_cand["terceros"].iterrows()])
                             faltante_c = tot_ag_c - tot_terc_c
                             diff_c = abs(faltante_c - sc_mover)
                             if diff_c < mejor_diff_sug:
@@ -4696,7 +4734,7 @@ with tab_triangulacion:
                         if f_c_num in facs_en_este or f_c_num in facturas_bloqueadas_validadas or not f_c_num:
                             continue
                             
-                        sc_cand_val = float(tr_cand_s.get("Total Neto", 0.0)) or (float(tr_cand_s.get("Base", 0.0)) + float(tr_cand_s.get("IVA", 0.0)))
+                        sc_cand_val = obtener_saldo_cruce_factura(tr_cand_s)
                         if sc_cand_val <= 0.0:
                             continue
                             
@@ -4845,7 +4883,7 @@ with tab_triangulacion:
                             
                         es_reg_c = bool(tr_cand.get("Ya Registrada", False))
                         tag_est = f"🔴 Registrada ({tr_cand.get('Comprobante Previo', '10-Prev')})" if es_reg_c else "⚪ No Contabilizada (Pendiente)"
-                        sc_cand = float(tr_cand.get("Total Neto", 0.0)) or (float(tr_cand.get("Base", 0.0)) + float(tr_cand.get("IVA", 0.0)))
+                        sc_cand = obtener_saldo_cruce_factura(tr_cand)
                         d_tag = f"({diff_m:+d}d)" if diff_m != 999 else "(sin fecha)"
                         tag_c = f"[{tag_est}] [{f_cand_num}] {d_tag} {tr_cand['Proveedor'][:20]} (Saldo: ${sc_cand:,.2f})"
                         opciones_cands.append((abs(diff_m), tag_c, tr_cand))
@@ -5126,7 +5164,7 @@ with tab_triangulacion:
                     
                 # 2. Resumen del Paquete
                 facs_terc_str = ", ".join([f"{r['Factura']} ({r['Proveedor'][:15]})" for _, r in terc_items.iterrows()]) if not terc_items.empty else "Ninguno"
-                tot_terc_sum = sum([float(r.get("Total Neto", 0.0) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0)))) for _, r in terc_items.iterrows()])
+                tot_terc_sum = sum([obtener_saldo_cruce_factura(r) for _, r in terc_items.iterrows()])
                 resumen_paquetes_lista.append({
                     "Paquete #": f"Paquete #{g_k}",
                     "Agente Coordinador": ag_item["Proveedor"],
@@ -5162,7 +5200,7 @@ with tab_triangulacion:
                     tiv = float(tr_it.get("IVA", 0.0))
                     rf = float(tr_it.get("ReteFuente", 0.0))
                     ri = float(tr_it.get("ReteICA", 0.0))
-                    sc = float(tr_it.get("Total Neto", 0.0)) or round(tb + tiv, 2)
+                    sc = obtener_saldo_cruce_factura(tr_it)
                     p_u = str(tr_it["Proveedor"]).upper()
                     rol_t = "🚚 Tercero Transporte (DHL)" if "DHL" in p_u else ("🏢 Tercero Agenciamiento (Mandato)" if any(k in p_u for k in ["CARGO", "ADUANA"]) else "🏬 Tercero Garaje / Almacén")
                     nat_t = "Honorario Propio Agenciamiento" if "COMISION" in str(tr_it.get("Descripcion", "")).upper() else "Gasto por Cuenta de Tercero"
@@ -5188,7 +5226,7 @@ with tab_triangulacion:
             for _, tr_lib in df_libres_exp.iterrows():
                 tb = float(tr_lib.get("Base", 0.0))
                 tiv = float(tr_lib.get("IVA", 0.0))
-                sc = float(tr_lib.get("Total Neto", 0.0)) or round(tb + tiv, 2)
+                sc = obtener_saldo_cruce_factura(tr_lib)
                 p_u = str(tr_lib["Proveedor"]).upper()
                 rol_t = "🚚 Tercero Transporte (DHL)" if "DHL" in p_u else ("🏢 Tercero Agenciamiento (Mandato)" if any(k in p_u for k in ["CARGO", "ADUANA"]) else "🏬 Tercero Garaje / Almacén")
                 detalle_facturas_lista.append({
