@@ -3019,6 +3019,8 @@ with tab_compras:
 
         # 1. Aplicar catálogo oficial de regímenes conocidos por NIT (solo una vez al cargar archivo inicial)
         if not st.session_state.get("_regimenes_conocidos_aplicados_v1", False):
+            if "Audit Info" not in df_proc.columns:
+                df_proc["Audit Info"] = [{} for _ in range(len(df_proc))]
             for r_idx, r_row in df_proc.iterrows():
                 if bool(r_row.get("Editada Manualmente", False)):
                     continue
@@ -4057,16 +4059,22 @@ with tab_triangulacion:
     if "df_procesado" in st.session_state:
         df_total = st.session_state["df_procesado"]
         
-        # Identificar ÚNICAMENTE facturas del gremio aduanero / logístico y de importación (Cero compras ordinarias/domésticas)
-        prov_upper = df_total["Proveedor"].astype(str).str.upper()
-        desc_upper = df_total.get("Descripcion", "").astype(str).str.upper()
-        grp_imp_str = df_total.get("Grupo Importación", "").astype(str).str.strip()
-        cta_cxp_str = df_total.get("Cuenta Pasivo Especifica", "").astype(str).str.strip()
-        cta_p_str = df_total.get("Cta Principal", "").astype(str).str.strip()
+        # Identificar facturas de comercio exterior / importación de forma segura sin errores de tipos
+        prov_series = df_total["Proveedor"] if "Proveedor" in df_total.columns else pd.Series("", index=df_total.index)
+        desc_series = df_total["Descripcion"] if "Descripcion" in df_total.columns else pd.Series("", index=df_total.index)
+        grp_series = df_total["Grupo Importación"] if "Grupo Importación" in df_total.columns else pd.Series("", index=df_total.index)
+        cta_cxp_series = df_total["Cuenta Pasivo Especifica"] if "Cuenta Pasivo Especifica" in df_total.columns else (df_total["Cta Contrapartida"] if "Cta Contrapartida" in df_total.columns else pd.Series("", index=df_total.index))
+        cta_p_series = df_total["Cta Principal"] if "Cta Principal" in df_total.columns else pd.Series("", index=df_total.index)
+
+        prov_upper = prov_series.fillna("").astype(str).str.upper()
+        desc_upper = desc_series.fillna("").astype(str).str.upper()
+        grp_imp_str = grp_series.fillna("").astype(str).str.strip()
+        cta_cxp_str = cta_cxp_series.fillna("").astype(str).str.strip()
+        cta_p_str = cta_p_series.fillna("").astype(str).str.strip()
 
         # 1. Facturas explícitamente marcadas en Excel con Grupo de Importación o clasificadas como aduaneras
         cond_grp = (grp_imp_str != "") & (~grp_imp_str.isin(["nan", "None", "0", "0.0"]))
-        cond_es_adu = df_total.get("Es Aduanera", False) == True
+        cond_es_adu = (df_total["Es Aduanera"] == True) if "Es Aduanera" in df_total.columns else pd.Series(False, index=df_total.index)
 
         # 2. Cuentas contables específicas de importación / fletes DHL / agencias aduaneras
         cond_ctas = cta_cxp_str.isin(["22050505", "23359501", "14650501"]) | (cta_p_str == "14650501")
@@ -4123,10 +4131,11 @@ with tab_triangulacion:
         with m_c2:
             st.metric("Facturas Soporte en Pool", len(df_terceros_all), help="Total de facturas candidatas para cruce")
         with m_c3:
-            n_rojas_adu = len(df_terceros_all[df_terceros_all.get("Ya Registrada", False) == True])
+            ya_reg_terc = df_terceros_all["Ya Registrada"].fillna(False).astype(bool) if "Ya Registrada" in df_terceros_all.columns else pd.Series(False, index=df_terceros_all.index)
+            n_rojas_adu = int(ya_reg_terc.sum())
             st.metric("Terceros Contabilizados (🔴)", n_rojas_adu, help="Causadas previamente en Siigo")
         with m_c4:
-            n_blancas_adu = len(df_terceros_all[df_terceros_all.get("Ya Registrada", False) == False])
+            n_blancas_adu = int((~ya_reg_terc).sum())
             st.metric("Terceros Pendientes (⚪)", n_blancas_adu, help="No contabilizadas aún (Nuevas)")
         with m_c5:
             n_cuad_prev = sum([1 for p in st.session_state.get("paquetes_importacion", {}).values() if p.get("diferencia", 999) < 1.0])
@@ -5356,7 +5365,8 @@ with tab_siigo:
         df_full = st.session_state["df_procesado"]
 
         # FILTRO DE PROTECCIÓN: Excluir facturas rojas (ya causadas en Siigo) y facturas que van por triangulación aduanera
-        n_rojas = len(df_full[df_full.get("Ya Registrada", False) == True])
+        ya_reg_siigo = df_full["Ya Registrada"].fillna(False).astype(bool) if "Ya Registrada" in df_full.columns else pd.Series(False, index=df_full.index)
+        n_rojas = int(ya_reg_siigo.sum())
 
         # Asegurar columna No Contabilizar en df_full
         if "No Contabilizar" not in df_full.columns:
@@ -5376,11 +5386,15 @@ with tab_siigo:
                 if isinstance(p_val, dict) and "terceros" in p_val and not p_val["terceros"].empty:
                     facs_en_pqs_import.extend(p_val["terceros"]["Factura"].tolist())
 
+        es_adu_siigo = df_full["Es Aduanera"].fillna(False).astype(bool) if "Es Aduanera" in df_full.columns else pd.Series(False, index=df_full.index)
+        grp_imp_siigo = df_full["Grupo Importación"].fillna("").astype(str).str.strip() if "Grupo Importación" in df_full.columns else pd.Series("", index=df_full.index)
+        cond_imp_adu = es_adu_siigo & (grp_imp_siigo != "")
+
         df_p = df_full[
-            (df_full.get("Ya Registrada", False) == False) &
+            (~ya_reg_siigo) &
             (~cond_excluidas) &
             (~df_full["Factura"].isin(facs_en_pqs_import)) &
-            (~((df_full.get("Es Aduanera", False) == True) & (df_full.get("Grupo Importación", "") != "")))
+            (~cond_imp_adu)
         ].copy()
 
         if n_rojas > 0:
