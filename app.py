@@ -690,7 +690,7 @@ def importar_respaldo_sesion_zip(zip_bytes, empresa_dict):
 # ==============================================================================
 CUENTA_RETENCION_ASUMIDA = "53152001"
 CUENTA_NO_DEDUCIBLE = "53950501"
-CUENTA_IVA_IMPORTACION = "24081501"
+CUENTA_IVA_IMPORTACION = "240835"
 CUENTA_IMPORTACION_TRANSITO = "14650501"
 CUENTA_CXP_AGENCIA_EXTERIOR = "22050505"
 CUENTA_CXP_DHL_NACIONAL = "23359501"
@@ -803,7 +803,7 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
     asume_ret = bool(fac_sel.get("Impuestos Asumidos", False))
     cta_cxp_usar = str(fac_sel.get("Cuenta Pasivo Especifica") or fac_sel.get("Cta Contrapartida") or ("22050505" if es_aduanero else "22050501")).strip()
     cta_p = str(fac_sel.get("Cta Principal") or "14650501").strip()
-    cta_iva = str(fac_sel.get("Cta IVA") or "24081501").strip()
+    cta_iva = str(fac_sel.get("Cta IVA") or ("240835" if es_aduanero else "24081001")).strip()
 
     base_val = float(fac_sel.get("Base", 0.0))
     iva_val = float(fac_sel.get("IVA", 0.0))
@@ -1168,6 +1168,9 @@ REGIMENES_EMISORES_CONOCIDOS = {
 CODIGOS_IMPUESTO_SIIGO = {
     '24081001': 1,   # IVA 19% compras bienes
     '24081003': 2,   # IVA 5% compras bienes
+    '24081501': 1,   # IVA Servicios 19%
+    '240835': 1,     # IVA de Importación 19%
+    '24083501': 1,   # IVA de Importación 19% (8 dígitos)
     '24080601': 1,   # IVA 19% ventas
     '24080602': 2,   # IVA 5% ventas
     '23651501': 3,   # Retefuente 11%
@@ -1487,6 +1490,8 @@ def clasificar_factura(nit_emisor, nombre_emisor, valor_base, valor_iva, tipo_do
             resp = resp_emisor.upper()
         if r_ap.get("cta_principal"):
             cta_aprendida = r_ap["cta_principal"]
+        if r_ap.get("cta_iva"):
+            cta_iva = r_ap["cta_iva"]
     if empresa_compradora is None:
         empresa_compradora = {"es_gran_contribuyente": False, "es_autorretenedor": False}
 
@@ -1506,7 +1511,7 @@ def clasificar_factura(nit_emisor, nombre_emisor, valor_base, valor_iva, tipo_do
         rfte_t = round(valor_base * 0.04, 2) if valor_base >= 210000 or "EURO SHIPPING" in nombre or "DHL" in nombre else 0.0
         rica_t = round(valor_base * 0.00966, 2) if valor_base >= 210000 and "BUENAVENTURA" not in nombre and "PORTUARIA" not in nombre else 0.0
         cta_p, cta_c, desc = "146505", "22050501", f"Importacion / Transito - {nombre_emisor[:25]}"
-        cta_rfte_b, cta_iva, cta_rica_b = "23652503", "24081501", "23680505"
+        cta_rfte_b, cta_iva, cta_rica_b = "23652503", "240835", "23680505"
         cat, razon_b = "Importacion (1465)", "Honorarios Agenciamiento vs Terceros"
 
     # 2. Repuestos / Mantenimiento
@@ -1528,13 +1533,14 @@ def clasificar_factura(nit_emisor, nombre_emisor, valor_base, valor_iva, tipo_do
         rica_t = round(valor_base * 0.00966, 2) if valor_base >= 210000 else 0.0
         cta_p, cta_c, desc = "51550501", "23359501", f"Alojamiento / Viaje - {nombre_emisor[:25]}"
         cta_rfte_b, cta_iva, cta_rica_b = "23652501", "24081501", "23680505"
-        cat, razon_b = "Gasto Viaje", "Hospedaje de personal"
+        cat, razon_b = "Gasto Viaje", "Hospedaje de personal (IVA Servicios 24081501)"
 
     # 4. Software Siigo
     elif "SIIGO" in nombre:
         cta_p, cta_c, desc = "51352001", "23359501", f"Software Siigo - {nombre_emisor[:25]}"
         rfte_t, rica_t = 0.0, 0.0
         cta_rfte_b, cta_iva, cta_rica_b = "", "24081501", ""
+        cat, razon_b = "Software", "Software y tecnologia (IVA Servicios 24081501)"
         cat, razon_b = "Software", "Software y tecnologia"
 
     # 5. Papelería
@@ -3483,6 +3489,19 @@ with tab_auditoria:
                         help="Puedes cambiar aquí la cuenta pasivo (ej. 22050505 Agencia Aduana, 23359501 Acreedores/DHL, 22050501 Proveedores)."
                     )
 
+                    # Cuenta de IVA de Importación (SOLO visible y configurable para facturas de importación / aduaneras)
+                    es_importacion_factura = es_aduanero or "1465" in str(fac_sel.get("Cta Principal", "")) or "IMPORTACI" in str(fac_sel.get("Categoría", "")).upper()
+                    cta_iva_def = str(fac_sel.get("Cta IVA") or ("240835" if es_importacion_factura else "24081001")).strip()
+                    if es_importacion_factura:
+                        nueva_cta_iva = st.text_input(
+                            "Cuenta IVA de Importación (Cta 240835):",
+                            value=cta_iva_def,
+                            key=f"inp_iva_{fac_sel['Comprobante Siigo']}",
+                            help="Cuenta contable de IVA de Importación (240835 / 24083501) exclusiva para importaciones y agenciamiento aduanero."
+                        )
+                    else:
+                        nueva_cta_iva = cta_iva_def
+
                 with c_mod2:
                     c_v1, c_v2 = st.columns(2)
                     base_cur_f = float(fac_sel["Base"]) if pd.notna(fac_sel["Base"]) else 0.0
@@ -3534,6 +3553,9 @@ with tab_auditoria:
                     cta_clean = nueva_cta_cxp.split()[0].strip()
                     df_p.at[r_idx, "Cuenta Pasivo Especifica"] = cta_clean
                     df_p.at[r_idx, "Cta Contrapartida"] = cta_clean
+                    df_p.at[r_idx, "Cta Principal"] = nueva_cta_p.split()[0].strip()
+                    cta_iva_clean = nueva_cta_iva.split()[0].strip() if 'nueva_cta_iva' in locals() and nueva_cta_iva else ("240835" if es_importacion_factura else "24081001")
+                    df_p.at[r_idx, "Cta IVA"] = cta_iva_clean
                     df_p.at[r_idx, "Impuestos Asumidos"] = asumir_imp
                     df_p.at[r_idx, "Editada Manualmente"] = True
 
@@ -3552,9 +3574,10 @@ with tab_auditoria:
                         empresa,
                         fac_sel.get("NIT Emisor"),
                         fac_sel.get("Proveedor"),
-                        cta_p=fac_sel.get("Cta Principal"),
+                        cta_p=nueva_cta_p.split()[0].strip(),
                         resp_fiscal=cod_reg,
                         cta_cxp=cta_clean,
+                        cta_iva=cta_iva_clean,
                         asumir_impuestos=asumir_imp
                     )
                     guardar_trabajo_en_historial(
@@ -3815,11 +3838,13 @@ with tab_auditoria:
                     "Crédito ($)": fac_sel["Base"] if es_nc else 0.0
                 })
 
-                # 2. IVA Descontable
+                # 2. IVA Descontable / IVA de Importación
                 if fac_sel["IVA"] > 0:
+                    cta_iva_actual = str(fac_sel.get("Cta IVA") or ("240835" if (es_aduanero or "1465" in str(fac_sel.get("Cta Principal", ""))) else "24081001")).strip()
+                    desc_iva_actual = f"IVA de Importación (Base: ${fac_sel['Base']:,.0f})" if (es_aduanero or "1465" in str(fac_sel.get("Cta Principal", ""))) else f"IVA Descontable (Base: ${fac_sel['Base']:,.0f})"
                     asiento_filas.append({
-                        "Código Cuenta": fac_sel["Cta IVA"],
-                        "Descripción de la Cuenta": f"IVA Descontable (Base: ${fac_sel['Base']:,.0f})",
+                        "Código Cuenta": cta_iva_actual,
+                        "Descripción de la Cuenta": desc_iva_actual,
                         "Tercero / NIT": fac_sel["NIT Emisor"],
                         "Débito ($)": 0.0 if es_nc else fac_sel["IVA"],
                         "Crédito ($)": fac_sel["IVA"] if es_nc else 0.0
@@ -5505,7 +5530,8 @@ with tab_siigo:
         ]
         impuestos = [
             ("IVA 19%", 1, 0.19, "24080601", "24081001", "24082001", "24081002"),
-            ("IVA Servicios 19%", "", 0.19, "24080601", "24081501", "24082001", "24082001"),
+            ("IVA Servicios 19%", 1, 0.19, "24080601", "24081501", "24082001", "24082001"),
+            ("IVA Importación 19%", 1, 0.19, "24080601", "240835", "24082001", "24081002"),
             ("IVA 5%", 2, 0.05, "24080602", "24081003", "24082002", "24081004"),
             ("Retefuente 11%", 3, 0.11, "13551509", "23651501", "13551510", "23651502"),
             ("Retefuente 10%", 4, 0.1, "13551507", "23652001", "13551508", "23652002"),
