@@ -262,7 +262,14 @@ def cargar_estado_manual(empresa_dict):
             pq_path = os.path.join(d, "paquetes_importacion.pkl")
             if os.path.exists(pq_path):
                 with open(pq_path, "rb") as f:
-                    st.session_state["paquetes_importacion"] = pickle.load(f)
+                    pqs_loaded = pickle.load(f)
+                    st.session_state["paquetes_importacion"] = pqs_loaded
+                    for pq_k, pq_v in pqs_loaded.items():
+                        if isinstance(pq_v, dict):
+                            if "asiento_fijo" in pq_v or "asiento_aprobado" in pq_v:
+                                st.session_state[f"paquete_listo_{pq_k}"] = True
+                            if "destino_siigo" in pq_v:
+                                st.session_state[f"paquete_destino_siigo_{pq_k}"] = pq_v["destino_siigo"]
             as_path = os.path.join(d, "asientos_triangulacion.pkl")
             if os.path.exists(as_path):
                 with open(as_path, "rb") as f:
@@ -356,6 +363,7 @@ def guardar_trabajo_en_historial(empresa_dict, df_procesado, excel_bytes=None, e
         try:
             estado_flags = {
                 "paquetes_listos": {k: v for k, v in st.session_state.items() if k.startswith("paquete_listo_")},
+                "paquetes_destino_siigo": {k: v for k, v in st.session_state.items() if k.startswith("paquete_destino_siigo_")},
                 "enviar_gp": {k: v for k, v in st.session_state.items() if k.startswith("enviar_gp_pq_")},
                 "enviar_h2": {k: v for k, v in st.session_state.items() if k.startswith("enviar_h2_pq_")},
                 "enviar_nd": {k: v for k, v in st.session_state.items() if k.startswith("enviar_nd_pq_")},
@@ -536,6 +544,8 @@ def cargar_trabajo_historial(empresa_dict, job_id):
             with open(es_file, "r", encoding="utf-8") as f_es:
                 est = json.load(f_es)
                 for k, v in est.get("paquetes_listos", {}).items():
+                    st.session_state[k] = v
+                for k, v in est.get("paquetes_destino_siigo", {}).items():
                     st.session_state[k] = v
                 for k, v in est.get("enviar_gp", {}).items():
                     st.session_state[k] = v
@@ -4074,23 +4084,22 @@ with tab_triangulacion:
                         
                         if pd.notna(f_ag_dt_i) and pd.notna(c_dt):
                             diff_dias = int((c_dt - f_ag_dt_i).days)
+                            # REGLA CRONOLÓGICA ESTRICTA: Solo conciliar facturas anteriores (-60 a 0 días) o un poco después (+1 a +15 días)
+                            if diff_dias < -60 or diff_dias > 15:
+                                continue  # DESCARTAR: fuera de la ventana cronológica del despacho
+                                
                             if diff_dias == 0:
                                 score_tiempo = 120
                                 relacion_fecha_txt = "🟢 Mismo día (0d)"
                             elif -30 <= diff_dias < 0:
-                                # Fechas anteriores en la misma ventana de despacho (ej. 1 a 19 de enero)
                                 score_tiempo = 100 - abs(diff_dias) * 2
                                 relacion_fecha_txt = f"⬅️ Anterior ({abs(diff_dias)}d antes)"
-                            elif 0 < diff_dias <= 12:
-                                # Fechas ligeramente superiores (ej. 20 a 25 de enero)
+                            elif 0 < diff_dias <= 15:
                                 score_tiempo = 85 - (diff_dias * 3)
-                                relacion_fecha_txt = f"➡️ Superior (+{diff_dias}d desp)"
+                                relacion_fecha_txt = f"➡️ Poco después (+{diff_dias}d desp)"
                             elif -60 <= diff_dias < -30:
-                                score_tiempo = 30 - abs(diff_dias)
-                                relacion_fecha_txt = f"⚠️ Anterior lejano ({abs(diff_dias)}d antes)"
-                            else:
-                                score_tiempo = -abs(diff_dias) * 5
-                                relacion_fecha_txt = f"⛔ Fuera de rango ({diff_dias:+d}d)"
+                                score_tiempo = 40 - abs(diff_dias)
+                                relacion_fecha_txt = f"⬅️ Anterior ({abs(diff_dias)}d antes)"
                         
                         # Coincidencia directa por Mandato (NIT o Nombre del agente en notas)
                         nit_fact = re.sub(r'\D', '', str(c_row_k.get("NIT Facturado A", "") or c_row_k.get("nit_facturado_a", "")))
@@ -4322,15 +4331,19 @@ with tab_triangulacion:
                 else:
                     df_asiento_paquete, dif_no_ded, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
 
-                def ejecutar_validacion_pq():
+                def ejecutar_validacion_pq(pasa_a_siigo=True):
                     st.session_state[f"paquete_listo_{pq_id_sel}"] = True
-                    st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_asiento_paquete.copy()
+                    st.session_state[f"paquete_destino_siigo_{pq_id_sel}"] = pasa_a_siigo
+                    paquete_activo["destino_siigo"] = pasa_a_siigo
                     paquete_activo["asiento_fijo"] = df_asiento_paquete.copy()
                     paquete_activo["asiento_aprobado"] = df_asiento_paquete.copy()
                     if "asientos_triangulacion_por_factura" not in st.session_state:
                         st.session_state["asientos_triangulacion_por_factura"] = {}
                     ag_fac_str = str(agente_actual["Factura"]).strip()
-                    st.session_state["asientos_triangulacion_por_factura"][ag_fac_str] = df_asiento_paquete.copy()
+                    if pasa_a_siigo:
+                        st.session_state["asientos_triangulacion_por_factura"][ag_fac_str] = df_asiento_paquete.copy()
+                    else:
+                        st.session_state["asientos_triangulacion_por_factura"].pop(ag_fac_str, None)
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
 
@@ -4355,8 +4368,12 @@ with tab_triangulacion:
                         df_pr = st.session_state["df_procesado"]
                         idx_ag = df_pr[df_pr["Factura"].astype(str).str.strip() == ag_fac_str].index
                         if not idx_ag.empty:
-                            df_pr.at[idx_ag[0], "Estado Registro"] = f"🔀 Validada en Triangulación (Pq #{pq_id_sel})"
+                            if pasa_a_siigo:
+                                df_pr.at[idx_ag[0], "Estado Registro"] = f"🔀 Validada en Triangulación (Pq #{pq_id_sel} - Pasa a Siigo)"
+                            else:
+                                df_pr.at[idx_ag[0], "Estado Registro"] = f"🔍 Conciliado en Triangulación (Pq #{pq_id_sel} - Solo Control Interno)"
                             df_pr.at[idx_ag[0], "Paquete Validado"] = pq_id_sel
+                            df_pr.at[idx_ag[0], "Destino Siigo"] = pasa_a_siigo
                         if not terceros_actual.empty:
                             for _, tr_row in terceros_actual.iterrows():
                                 tr_fac = str(tr_row["Factura"]).strip()
@@ -4366,7 +4383,10 @@ with tab_triangulacion:
                                     if es_r:
                                         df_pr.at[idx_t[0], "Estado Registro"] = f"🔴 Cruzada en Pq #{pq_id_sel} (Solo cuenta pasivo)"
                                     else:
-                                        df_pr.at[idx_t[0], "Estado Registro"] = f"⚪ Cruzada en Pq #{pq_id_sel} (Causada en triangulación)"
+                                        if pasa_a_siigo:
+                                            df_pr.at[idx_t[0], "Estado Registro"] = f"⚪ Cruzada en Pq #{pq_id_sel} (Causada en triangulación)"
+                                        else:
+                                            df_pr.at[idx_t[0], "Estado Registro"] = f"🔍 Conciliada en Pq #{pq_id_sel} (Solo Control Interno)"
                                     df_pr.at[idx_t[0], "Paquete Validado"] = pq_id_sel
                                     df_pr.at[idx_t[0], "Cruza Con Agente"] = ag_fac_str
                         st.session_state["df_procesado"] = df_pr
@@ -4374,7 +4394,8 @@ with tab_triangulacion:
 
                 def ejecutar_desbloqueo_pq():
                     st.session_state[f"paquete_listo_{pq_id_sel}"] = False
-                    st.session_state.pop(f"asiento_fijo_pq_{pq_id_sel}", None)
+                    st.session_state.pop(f"paquete_destino_siigo_{pq_id_sel}", None)
+                    paquete_activo.pop("destino_siigo", None)
                     paquete_activo.pop("asiento_fijo", None)
                     paquete_activo.pop("asiento_aprobado", None)
                     ag_fac_str = str(agente_actual["Factura"]).strip()
@@ -4387,6 +4408,8 @@ with tab_triangulacion:
                         idx_ag = df_pr[df_pr["Factura"].astype(str).str.strip() == ag_fac_str].index
                         if not idx_ag.empty:
                             df_pr.at[idx_ag[0], "Estado Registro"] = "🟡 Agente Aduanero"
+                            df_pr.at[idx_ag[0], "Paquete Validado"] = ""
+                            df_pr.at[idx_ag[0], "Destino Siigo"] = None
                         if not terceros_actual.empty:
                             for _, tr_row in terceros_actual.iterrows():
                                 tr_fac = str(tr_row["Factura"]).strip()
@@ -4395,6 +4418,8 @@ with tab_triangulacion:
                                     es_r = bool(df_pr.at[idx_t[0], "Ya Registrada"]) or bool(df_pr.at[idx_t[0], "No Contabilizar"])
                                     cp = df_pr.at[idx_t[0], "Comprobante Previo"]
                                     df_pr.at[idx_t[0], "Estado Registro"] = f"🔴 Ya Registrada ({cp})" if es_r else "⚪ Compra Pendiente"
+                                    df_pr.at[idx_t[0], "Paquete Validado"] = ""
+                                    df_pr.at[idx_t[0], "Cruza Con Agente"] = ""
                         st.session_state["df_procesado"] = df_pr
                     guardar_estado_manual(empresa)
 
@@ -4426,13 +4451,24 @@ with tab_triangulacion:
 
                 es_val_card = st.session_state.get(f"paquete_listo_{pq_id_sel}", False)
                 if not es_val_card:
-                    st.info(f"ℹ️ Cuando este paquete esté cuadrado, valídalo para trasladar su asiento a Página 2 y bloquear sus facturas.")
-                    if st.button(f"🔒 Validar Paquete #{pq_id_sel}", key=f"btn_val_card_{pq_id_sel}", type="primary", use_container_width=True):
-                        ejecutar_validacion_pq()
-                        st.success(f"🔒 ¡Paquete #{pq_id_sel} validado y trasladado a Página 2!")
-                        st.rerun()
+                    st.caption(f"ℹ️ Elige el destino de este paquete al validarlo:")
+                    c_vcard1, c_vcard2 = st.columns(2)
+                    with c_vcard1:
+                        if st.button("📤 Pasar a Hoja 2", key=f"btn_val_siigo_card_{pq_id_sel}", type="primary", use_container_width=True, help="Bloquea el paquete y lo traslada a Página 2 para subirlo a la Planilla de Siigo"):
+                            ejecutar_validacion_pq(pasa_a_siigo=True)
+                            st.success(f"¡Paquete #{pq_id_sel} trasladado a Página 2 para Siigo!")
+                            st.rerun()
+                    with c_vcard2:
+                        if st.button("📑 Solo Conciliación", key=f"btn_val_concil_card_{pq_id_sel}", use_container_width=True, help="Bloquea el paquete para identificar y conciliar facturas, sin subirlo a la Planilla de Siigo"):
+                            ejecutar_validacion_pq(pasa_a_siigo=False)
+                            st.success(f"¡Paquete #{pq_id_sel} guardado para Conciliación Interna!")
+                            st.rerun()
                 else:
-                    st.success(f"🔒 **Paquete #{pq_id_sel} VALIDADO Y TRASLADADO A PÁGINA 2**")
+                    es_siigo = st.session_state.get(f"paquete_destino_siigo_{pq_id_sel}", True)
+                    if es_siigo:
+                        st.success(f"🔒 **Pq #{pq_id_sel}: PASA A HOJA 2 (PLANILLA SIIGO)**")
+                    else:
+                        st.info(f"📑 **Pq #{pq_id_sel}: SOLO CONCILIACIÓN INTERNA**")
                     if st.button(f"🔓 Desbloquear Paquete #{pq_id_sel}", key=f"btn_desb_card_{pq_id_sel}", use_container_width=True):
                         ejecutar_desbloqueo_pq()
                         st.rerun()
@@ -4648,14 +4684,22 @@ with tab_triangulacion:
                         fec_dt = pd.to_datetime(fec_str, dayfirst=True, errors="coerce")
                         diff_dias = int((fec_dt - f_ag_dt_sug).days) if (pd.notna(fec_dt) and pd.notna(f_ag_dt_sug)) else 999
                         
+                        # REGLA CRONOLÓGICA ESTRICTA: Solo facturas anteriores (-60d a 0d) o un poco después (+1d a +15d)
+                        if pd.notna(fec_dt) and pd.notna(f_ag_dt_sug):
+                            if diff_dias < -60 or diff_dias > 15:
+                                continue
+                        elif diff_dias == 999:
+                            continue
+                        
                         tags_sug = []
                         score_sug = 0
                         
-                        # Coincidencias específicas con los ítems de ingresos por terceros
-                        if abs(sc_cand_val - 1079157.20) < 50000:
+                        # Coincidencias específicas con los ítems de ingresos por terceros (solo si la factura del agente es BOG-70697 o de saldo similar)
+                        es_caso_70697 = "70697" in str(agente_actual.get("Factura", "")) or abs(saldo_terceros_esperado_act - 2542421.20) < 100.0
+                        if es_caso_70697 and abs(sc_cand_val - 1079157.20) < 50000:
                             tags_sug.append("✈️ Flete Internacional (~$1.08M)")
                             score_sug += 180 - (abs(sc_cand_val - 1079157.20) / 1000)
-                        elif abs(sc_cand_val - 1463264.00) < 50000:
+                        elif es_caso_70697 and abs(sc_cand_val - 1463264.00) < 50000:
                             tags_sug.append("🏢 Cargos en Origen (~$1.46M)")
                             score_sug += 180 - (abs(sc_cand_val - 1463264.00) / 1000)
                         elif abs(sc_cand_val - dif_faltante_prev) < 5000:
@@ -4665,12 +4709,19 @@ with tab_triangulacion:
                             tags_sug.append(f"🧩 Cubre {(sc_cand_val / dif_faltante_prev * 100):.1f}% del faltante")
                             score_sug += 60
                             
-                        if abs(diff_dias) <= 15:
-                            tags_sug.append(f"📅 Mismo período ({diff_dias:+d}d)" if diff_dias != 0 else "🟢 Mismo día")
-                            score_sug += 60
-                        elif -35 <= diff_dias <= 5:
-                            tags_sug.append(f"📅 Despacho ({abs(diff_dias)}d antes)")
-                            score_sug += 40
+                        # Ponderación por cercanía de fecha dentro de la ventana (-60 a +15)
+                        if diff_dias == 0:
+                            tags_sug.append("🟢 Mismo día (0d)")
+                            score_sug += 100
+                        elif 0 < diff_dias <= 15:
+                            tags_sug.append(f"➡️ Poco después (+{diff_dias}d)")
+                            score_sug += 85 - (diff_dias * 3)
+                        elif -30 <= diff_dias < 0:
+                            tags_sug.append(f"⬅️ Anterior ({abs(diff_dias)}d antes)")
+                            score_sug += 90 - (abs(diff_dias) * 2)
+                        elif -60 <= diff_dias < -30:
+                            tags_sug.append(f"⬅️ Anterior ({abs(diff_dias)}d antes)")
+                            score_sug += 40 - abs(diff_dias)
                             
                         if any(k in prov_u for k in ["DHL", "CARGO", "ADUANA", "GARAJE", "ALMAVIVA", "ALMACENADORA", "UPS", "FEDEX", "FLETE", "TRANSPORTE", "PUERTO", "TERMINAL"]):
                             tags_sug.append("🚢 Logística/Aduana")
@@ -4747,18 +4798,37 @@ with tab_triangulacion:
                     st.markdown("---")
 
                 st.markdown("##### ➕ Añadir Manualmente otra Factura Libre a este paquete:")
-                opciones_agregar = []
+                filtro_cercanas_man = st.checkbox(
+                    "📅 Filtrar solo facturas de la ventana cronológica (-60d anteriores a +15d posteriores)",
+                    value=True,
+                    key=f"chk_fec_man_{pq_id_sel}",
+                    help="Oculta facturas lejanas de otros meses y muestra solo facturas anteriores o un poco después de la operación."
+                )
+
+                opciones_cands = []
                 mapa_agregar = {}
 
                 for _, tr_cand in cands_disp_agregar.iterrows():
                     f_cand_num = str(tr_cand["Factura"]).strip()
                     if f_cand_num not in facs_en_este and f_cand_num not in facturas_bloqueadas_validadas:
+                        fec_c_str = str(tr_cand.get("Fecha", ""))
+                        fec_c_dt = pd.to_datetime(fec_c_str, dayfirst=True, errors="coerce")
+                        diff_m = int((fec_c_dt - f_ag_dt_sug).days) if (pd.notna(fec_c_dt) and pd.notna(f_ag_dt_sug)) else 999
+                        
+                        if filtro_cercanas_man and (diff_m < -60 or diff_m > 15):
+                            continue
+                            
                         es_reg_c = bool(tr_cand.get("Ya Registrada", False))
                         tag_est = f"🔴 Registrada ({tr_cand.get('Comprobante Previo', '10-Prev')})" if es_reg_c else "⚪ No Contabilizada (Pendiente)"
                         sc_cand = float(tr_cand.get("Total Neto", 0.0)) or (float(tr_cand.get("Base", 0.0)) + float(tr_cand.get("IVA", 0.0)))
-                        tag_c = f"[{tag_est}] [{f_cand_num}] {tr_cand['Proveedor'][:22]} (Saldo: ${sc_cand:,.2f})"
-                        opciones_agregar.append(tag_c)
-                        mapa_agregar[tag_c] = tr_cand
+                        d_tag = f"({diff_m:+d}d)" if diff_m != 999 else "(sin fecha)"
+                        tag_c = f"[{tag_est}] [{f_cand_num}] {d_tag} {tr_cand['Proveedor'][:20]} (Saldo: ${sc_cand:,.2f})"
+                        opciones_cands.append((abs(diff_m), tag_c, tr_cand))
+
+                opciones_cands.sort(key=lambda x: x[0])
+                opciones_agregar = [x[1] for x in opciones_cands]
+                for _, tag_c, tr_cand in opciones_cands:
+                    mapa_agregar[tag_c] = tr_cand
                         
                 c_add1, c_add2 = st.columns([3, 1.2])
                 with c_add1:
@@ -4945,22 +5015,59 @@ with tab_triangulacion:
                         unsafe_allow_html=True
                     )
 
-                col_val1, col_val2 = st.columns([2.8, 1.4])
-                with col_val1:
-                    st.caption("🔒 Al presionar **'Validar Paquete'**, todas sus facturas de terceros quedan **bloqueadas** para no ser tomadas ni cruzadas en los demás paquetes, y su asiento contable se fija para Siigo (Página 4).")
-                with col_val2:
-                    if st.button("🔒 Validar Paquete (Bloquear Facturas y Trasladar a Página 2)", key=f"btn_validar_main_{pq_id_sel}", type="primary", use_container_width=True):
-                        ejecutar_validacion_pq()
-                        st.success(f"🔒 ¡Paquete #{pq_id_sel} VALIDADO y trasladado a Página 2 con éxito!")
+                c_val_opt1, c_val_opt2 = st.columns(2)
+                with c_val_opt1:
+                    st.markdown(
+                        "<div style='background:#f0fdf4; border:1.5px solid #22c55e; border-radius:8px; padding:12px; height:100%;'>"
+                        "<b style='color:#15803d; font-size:15px;'>📤 Opción 1: Pasar a Hoja 2 (Subir a Planilla Siigo)</b><br>"
+                        "<span style='font-size:12.5px; color:#166534;'>"
+                        "Bloquea las facturas del paquete, actualiza la Página 2 y <b>genera el comprobante oficial en la Planilla de Siigo (Página 4)</b> para su contabilización."
+                        "</span></div>",
+                        unsafe_allow_html=True
+                    )
+                    st.write("")
+                    if st.button("📤 Pasar a Hoja 2 (Subir a Planilla Siigo)", key=f"btn_validar_siigo_{pq_id_sel}", type="primary", use_container_width=True):
+                        ejecutar_validacion_pq(pasa_a_siigo=True)
+                        st.success(f"🔒 ¡Paquete #{pq_id_sel} VALIDADO y trasladado a Página 2 para Siigo!")
+                        st.rerun()
+
+                with c_val_opt2:
+                    st.markdown(
+                        "<div style='background:#eff6ff; border:1.5px solid #3b82f6; border-radius:8px; padding:12px; height:100%;'>"
+                        "<b style='color:#1d4ed8; font-size:15px;'>📑 Opción 2: Simplemente Conciliación (No Subir a Siigo)</b><br>"
+                        "<span style='font-size:12.5px; color:#1e40af;'>"
+                        "Bloquea e identifica las facturas para <b>auditoría y soporte de costos</b>, pero <b>NO genera comprobante en Siigo</b> (evita duplicar pagos ya hechos por tesorería/bancos)."
+                        "</span></div>",
+                        unsafe_allow_html=True
+                    )
+                    st.write("")
+                    if st.button("📑 Simplemente Conciliación (No Subir a Siigo)", key=f"btn_validar_concil_{pq_id_sel}", use_container_width=True):
+                        ejecutar_validacion_pq(pasa_a_siigo=False)
+                        st.success(f"📑 ¡Paquete #{pq_id_sel} CONCILIADO exitosamente para control interno (no irá a Siigo)!")
                         st.rerun()
             else:
-                col_desb1, col_desb2 = st.columns([3.2, 1.3])
+                es_siigo = st.session_state.get(f"paquete_destino_siigo_{pq_id_sel}", True)
+                col_desb1, col_desb2 = st.columns([3.2, 1.4])
                 with col_desb1:
-                    st.success(f"🔒 **Paquete #{pq_id_sel} VALIDADO Y TRASLADADO A PÁGINA 2:** Sus facturas están protegidas contra otros cruces y su asiento está asegurado para la Planilla de Siigo (Página 4).")
+                    if es_siigo:
+                        st.success(f"🔒 **Paquete #{pq_id_sel} VALIDADO (PASA A HOJA 2 / PLANILLA SIIGO):** Sus facturas están protegidas contra otros cruces y su comprobante se exportará en la Planilla de Siigo (Página 4).")
+                    else:
+                        st.info(f"📑 **Paquete #{pq_id_sel} CONCILIADO (SOLO CONTROL INTERNO / IDENTIFICACIÓN):** Facturas identificadas y protegidas para auditoría DIAN. **No se generará comprobante en Siigo** para evitar duplicidades.")
                 with col_desb2:
-                    if st.button("🔓 Desbloquear y Modificar", key=f"btn_desbloquear_main_{pq_id_sel}", use_container_width=True):
-                        ejecutar_desbloqueo_pq()
-                        st.rerun()
+                    c_sw1, c_sw2 = st.columns(2)
+                    with c_sw1:
+                        if es_siigo:
+                            if st.button("📑 Cambiar a Solo Conciliación", key=f"btn_sw_concil_{pq_id_sel}", use_container_width=True, help="Cambia el destino para que NO se suba a la planilla Siigo"):
+                                ejecutar_validacion_pq(pasa_a_siigo=False)
+                                st.rerun()
+                        else:
+                            if st.button("📤 Cambiar a Pasar a Hoja 2", key=f"btn_sw_siigo_{pq_id_sel}", type="primary", use_container_width=True, help="Cambia el destino para que SÍ se suba a Siigo"):
+                                ejecutar_validacion_pq(pasa_a_siigo=True)
+                                st.rerun()
+                    with c_sw2:
+                        if st.button("🔓 Desbloquear", key=f"btn_desbloquear_main_{pq_id_sel}", use_container_width=True):
+                            ejecutar_desbloqueo_pq()
+                            st.rerun()
 
             st.markdown("---")
             st.markdown("#### 📥 Exportar Control de Paquetes y Cruces de Importación:")
@@ -5137,18 +5244,19 @@ with tab_siigo:
         if n_excluidas > 0:
             st.warning(f"🚫 **Facturas Excluidas:** Se excluyeron {n_excluidas} facturas marcadas como **'NO CONTABILIZAR'**.")
 
-        # Paquetes de triangulación listos para llevar a contabilidad en su fecha
-        pqs_listos_siigo = {k: v for k, v in pqs_actuales_siigo.items() if st.session_state.get(f"paquete_listo_{k}", False)}
+        # Paquetes de triangulación listos para llevar a contabilidad en su fecha (excluyendo los marcados solo para conciliación)
+        pqs_listos_siigo = {k: v for k, v in pqs_actuales_siigo.items() if st.session_state.get(f"paquete_listo_{k}", False) and st.session_state.get(f"paquete_destino_siigo_{k}", True)}
+        pqs_solo_concil = {k: v for k, v in pqs_actuales_siigo.items() if st.session_state.get(f"paquete_listo_{k}", False) and not st.session_state.get(f"paquete_destino_siigo_{k}", True)}
 
         c_pqs_inc1, c_pqs_inc2 = st.columns([2.5, 1.5])
         with c_pqs_inc1:
             inc_pqs_listos = st.checkbox(
-                f"🔀 **Llevar a la contabilidad {len(pqs_listos_siigo)} Paquete(s) de Triangulación LISTO(S)**",
+                f"🔀 **Llevar a la contabilidad {len(pqs_listos_siigo)} Paquete(s) de Triangulación que pasan a Siigo**",
                 value=True if pqs_listos_siigo else False,
-                help="Inserta los asientos contables de los paquetes de importación listos en la planilla oficial de Siigo, cada uno en su fecha exacta de operación con partida doble cuadrada."
+                help="Inserta los asientos contables de los paquetes listos marcados como 'Pasar a Hoja 2' en la planilla oficial de Siigo."
             )
         with c_pqs_inc2:
-            st.caption(f"Paquetes listos: **{len(pqs_listos_siigo)}** de **{len(pqs_actuales_siigo)}** totales.")
+            st.caption(f"Suben a Siigo: **{len(pqs_listos_siigo)}** | Solo Conciliación: **{len(pqs_solo_concil)}** | Totales: **{len(pqs_actuales_siigo)}**")
 
         wb = openpyxl.Workbook()
 
