@@ -806,12 +806,28 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
     es_importacion_factura = es_aduanero or "1465" in cta_p or "IMPORTACI" in str(fac_sel.get("Categoría", "")).upper()
     cta_iva = str(fac_sel.get("Cta IVA") or ("24081501" if es_importacion_factura else "24081001")).strip()
 
-    base_val = float(fac_sel.get("Base", 0.0))
-    iva_val = float(fac_sel.get("IVA", 0.0))
-    tot_val = float(fac_sel.get("Total", 0.0))
-    rfte_val = float(fac_sel.get("ReteFuente", 0.0))
-    rica_val = float(fac_sel.get("ReteICA", 0.0))
-    riva_val = float(fac_sel.get("ReteIVA", 0.0))
+    def _sf(v):
+        try:
+            if v is not None and pd.notna(v):
+                fv = float(v)
+                return fv if not pd.isna(fv) else 0.0
+        except Exception:
+            pass
+        return 0.0
+
+    base_val = _sf(fac_sel.get("Base"))
+    iva_val = _sf(fac_sel.get("IVA"))
+    tot_val = _sf(fac_sel.get("Total"))
+    rfte_val = _sf(fac_sel.get("ReteFuente"))
+    rica_val = _sf(fac_sel.get("ReteICA"))
+    riva_val = _sf(fac_sel.get("ReteIVA"))
+    iva_imp_val = _sf(fac_sel.get("IVA Importación"))
+
+    raw_cta_imp = fac_sel.get("Cta IVA Importación")
+    if raw_cta_imp is None or pd.isna(raw_cta_imp) or str(raw_cta_imp).strip() in ["", "nan", "None"]:
+        cta_iva_imp = "240835"
+    else:
+        cta_iva_imp = str(raw_cta_imp).strip()
 
     # 1. Base / Costo
     asiento_filas.append({
@@ -824,17 +840,16 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
 
     # 2. IVA Descontable (Servicios / Compras)
     if iva_val > 0:
+        desc_iva = f"IVA Descontable Servicios (Base: ${base_val:,.0f})" if ("24081501" in cta_iva or es_importacion_factura) else f"IVA Descontable (Base: ${base_val:,.0f})"
         asiento_filas.append({
             "Código Cuenta": cta_iva,
-            "Descripción de la Cuenta": f"IVA Descontable Servicios (Base: ${base_val:,.0f})" if ("24081501" in cta_iva or es_importacion_factura) else f"IVA Descontable (Base: ${base_val:,.0f})",
+            "Descripción de la Cuenta": desc_iva,
             "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
             "Débito ($)": 0.0 if es_nc else iva_val,
             "Crédito ($)": iva_val if es_nc else 0.0
         })
 
     # 2.B IVA de Importación (Cuenta 240835) - Solo para facturas de importación
-    iva_imp_val = float(fac_sel.get("IVA Importación", 0.0))
-    cta_iva_imp = str(fac_sel.get("Cta IVA Importación") or "240835").strip()
     if iva_imp_val > 0:
         asiento_filas.append({
             "Código Cuenta": cta_iva_imp,
@@ -3430,7 +3445,19 @@ with tab_auditoria:
         # Asegurar columna No Contabilizar en df_p
         if "No Contabilizar" not in df_p.columns:
             df_p["No Contabilizar"] = False
-            st.session_state["df_procesado"] = df_p
+
+        # Normalizar columnas numéricas críticas para evitar que aparezcan valores NaN / None
+        if "IVA Importación" not in df_p.columns:
+            df_p["IVA Importación"] = 0.0
+        else:
+            df_p["IVA Importación"] = pd.to_numeric(df_p["IVA Importación"], errors="coerce").fillna(0.0)
+
+        if "Cta IVA Importación" not in df_p.columns:
+            df_p["Cta IVA Importación"] = "240835"
+        else:
+            df_p["Cta IVA Importación"] = df_p["Cta IVA Importación"].fillna("240835").astype(str).replace(["nan", "None", ""], "240835")
+            
+        st.session_state["df_procesado"] = df_p
 
         # Inicializar conjunto de facturas excluidas de contabilización
         if "facturas_no_contabilizar" not in st.session_state:
@@ -3647,13 +3674,25 @@ with tab_auditoria:
 
                     # CAMPO DEDICADO: IVA DE IMPORTACIÓN (CUENTA 240835) - SOLO PARA FACTURAS DE IMPORTACIÓN
                     if es_importacion_factura:
-                        val_iva_imp_actual = float(fac_sel.get("IVA Importación", 0.0))
-                        cta_iva_imp_actual = str(fac_sel.get("Cta IVA Importación") or "240835").strip()
+                        raw_imp_f = fac_sel.get("IVA Importación")
+                        try:
+                            val_iva_imp_actual = float(raw_imp_f) if (raw_imp_f is not None and pd.notna(raw_imp_f)) else 0.0
+                            if pd.isna(val_iva_imp_actual):
+                                val_iva_imp_actual = 0.0
+                        except Exception:
+                            val_iva_imp_actual = 0.0
+
+                        raw_cta_f = fac_sel.get("Cta IVA Importación")
+                        if raw_cta_f is None or pd.isna(raw_cta_f) or str(raw_cta_f).strip() in ["", "nan", "None"]:
+                            cta_iva_imp_actual = "240835"
+                        else:
+                            cta_iva_imp_actual = str(raw_cta_f).strip()
+
                         c_imp1, c_imp2 = st.columns(2)
                         with c_imp1:
                             nuevo_iva_imp = st.number_input(
                                 "🚢 IVA de Importación ($) (Cta 240835):",
-                                value=val_iva_imp_actual,
+                                value=float(val_iva_imp_actual),
                                 step=1000.0,
                                 key=f"niva_imp_val_{fac_sel['Comprobante Siigo']}",
                                 help="Ingresa aquí el valor del IVA pagado en la importación / declaración de aduanas que se imputa a la cuenta 240835."
@@ -3694,22 +3733,27 @@ with tab_auditoria:
                     df_p.at[r_idx, "Cta Principal"] = nueva_cta_p.split()[0].strip()
                     cta_iva_clean = nueva_cta_iva.split()[0].strip() if 'nueva_cta_iva' in locals() and nueva_cta_iva else ("24081501" if es_importacion_factura else "24081001")
                     df_p.at[r_idx, "Cta IVA"] = cta_iva_clean
-                    df_p.at[r_idx, "IVA Importación"] = nuevo_iva_imp
-                    df_p.at[r_idx, "Cta IVA Importación"] = cta_iva_imp_cod.split()[0].strip()
+                    nuevo_iva_imp_f = float(nuevo_iva_imp) if pd.notna(nuevo_iva_imp) else 0.0
+                    cta_iva_imp_clean = cta_iva_imp_cod.split()[0].strip()
+                    if not cta_iva_imp_clean or cta_iva_imp_clean in ["nan", "None"]:
+                        cta_iva_imp_clean = "240835"
+                    df_p.at[r_idx, "IVA Importación"] = nuevo_iva_imp_f
+                    df_p.at[r_idx, "Cta IVA Importación"] = cta_iva_imp_clean
                     df_p.at[r_idx, "Impuestos Asumidos"] = asumir_imp
                     df_p.at[r_idx, "Editada Manualmente"] = True
 
+                    r_iva_val = float(fac_sel.get("ReteIVA", 0.0)) if pd.notna(fac_sel.get("ReteIVA")) else 0.0
                     if asumir_imp:
-                        saldo_p = round(nueva_base + nuevo_iva + nuevo_iva_imp, 2)
+                        saldo_p = round(nueva_base + nuevo_iva + nuevo_iva_imp_f, 2)
                         df_p.at[r_idx, "Neto a Pagar"] = saldo_p
                         df_p.at[r_idx, "Total Neto"] = saldo_p
                     else:
-                        neto_p_calc = round(nueva_base + nuevo_iva + nuevo_iva_imp - nueva_rfte - nuevo_rica - float(fac_sel.get("ReteIVA", 0.0)), 2)
+                        neto_p_calc = round(nueva_base + nuevo_iva + nuevo_iva_imp_f - nueva_rfte - nuevo_rica - r_iva_val, 2)
                         df_p.at[r_idx, "Neto a Pagar"] = neto_p_calc
                         df_p.at[r_idx, "Total Neto"] = neto_p_calc
 
-                    tot_esperado = round(nueva_base + nuevo_iva + nuevo_iva_imp, 2)
-                    if nuevo_iva_imp > 0 and abs(float(df_p.at[r_idx, "Total"]) - tot_esperado) > 10.0:
+                    tot_esperado = round(nueva_base + nuevo_iva + nuevo_iva_imp_f, 2)
+                    if nuevo_iva_imp_f > 0 and abs(float(df_p.at[r_idx, "Total"]) - tot_esperado) > 10.0:
                         df_p.at[r_idx, "Total"] = tot_esperado
 
                     st.session_state["df_procesado"] = df_p
@@ -3985,8 +4029,9 @@ with tab_auditoria:
             else:
                 df_asiento = pd.DataFrame(asiento_filas)
 
+        cols_as_dsp = [c for c in ["Código Cuenta", "Descripción de la Cuenta", "Tercero / NIT", "Débito ($)", "Crédito ($)"] if c in df_asiento.columns]
         st.dataframe(
-            df_asiento.style.format({"Débito ($)": "${:,.2f}", "Crédito ($)": "${:,.2f}"}),
+            df_asiento[cols_as_dsp].style.format({"Débito ($)": "${:,.2f}", "Crédito ($)": "${:,.2f}"}),
             use_container_width=True,
             hide_index=True
         )
