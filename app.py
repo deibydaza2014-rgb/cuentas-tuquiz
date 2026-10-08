@@ -965,6 +965,35 @@ def obtener_saldo_cruce_factura(tr):
     return 0.0
 
 
+
+
+def calcular_concordancia_fecha(fecha_tercero, fecha_agente):
+    """
+    Calcula de forma dinámica la concordancia cronológica entre la factura del tercero y la del agente,
+    garantizando que nunca retorne None ni NaN.
+    """
+    if not fecha_tercero or not fecha_agente or pd.isna(fecha_tercero) or pd.isna(fecha_agente):
+        return "⚪ Sin fecha"
+    dt_terc = pd.to_datetime(str(fecha_tercero), dayfirst=True, errors="coerce")
+    dt_ag = pd.to_datetime(str(fecha_agente), dayfirst=True, errors="coerce")
+    if pd.isna(dt_terc) or pd.isna(dt_ag):
+        return "⚪ Sin fecha"
+    
+    diff_d = int((dt_terc - dt_ag).days)
+    if diff_d == 0:
+        return "🟢 Mismo día (0d)"
+    elif 0 < diff_d <= 15:
+        return f"➡️ Poco después (+{diff_d}d)"
+    elif -30 <= diff_d < 0:
+        return f"⬅️ Anterior ({abs(diff_d)}d antes)"
+    elif -60 <= diff_d < -30:
+        return f"⬅️ Anterior ({abs(diff_d)}d antes)"
+    elif diff_d < -60:
+        return f"⛔ Fuera de rango ({abs(diff_d)}d antes)"
+    else:
+        return f"⛔ Fuera de rango (+{diff_d}d desp)"
+
+
 def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_no_deducible=False, imputar_a_transito=False):
     """
     Construye el asiento contable para un cobro de agente cuando se trae la contabilización de Página 2:
@@ -4550,10 +4579,17 @@ with tab_triangulacion:
                         cta_actual_tr = str(tr.get("Cuenta Pasivo Especifica", "22050505" if "CARGO" in str(tr["Proveedor"]).upper() else "23359501")).strip()
                         p_nom = str(tr["Proveedor"]).upper()
                         rol_dsp = "🚚 DHL (Flete)" if "DHL" in p_nom else ("🏢 Agencia (Aduana)" if any(k in p_nom for k in ["CARGO", "ADUANA"]) else "🏬 Garaje / Almacén")
+                        
+                        rel_fec_val = tr.get("Relación Fecha")
+                        if pd.isna(rel_fec_val) or not str(rel_fec_val).strip() or str(rel_fec_val).strip() in ["nan", "None"]:
+                            concordancia_dsp = calcular_concordancia_fecha(tr.get("Fecha"), agente_actual.get("Fecha"))
+                        else:
+                            concordancia_dsp = str(rel_fec_val).strip()
+                            
                         filas_terc_disp.append({
                             "Rol": rol_dsp,
                             "Fecha Factura": tr.get("Fecha", "-"),
-                            "Concordancia Fecha": tr.get("Relación Fecha", "Concorde"),
+                            "Concordancia Fecha": concordancia_dsp,
                             "Estado Contable": badge_est,
                             "Proveedor Tercero": tr["Proveedor"][:22],
                             "Factura": tr["Factura"],
