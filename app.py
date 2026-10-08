@@ -3441,7 +3441,7 @@ with tab_auditoria:
     st.markdown("### Modulo de Auditoria Contable y Trazabilidad")
     st.caption("Inspección de cuentas, deducciones y separación de gastos por cuenta de terceros.")
 
-    if "df_procesado" in st.session_state:
+    if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None and isinstance(st.session_state["df_procesado"], pd.DataFrame) and not st.session_state["df_procesado"].empty:
         df_p = st.session_state["df_procesado"]
 
         # Asegurar columna No Contabilizar en df_p
@@ -3515,16 +3515,26 @@ with tab_auditoria:
             if st.session_state["sel_factura_auditoria_box"] not in opciones_fac and idx_fac_sel < len(opciones_fac):
                 st.session_state["sel_factura_auditoria_box"] = opciones_fac[idx_fac_sel]
 
+        if not opciones_fac:
+            st.info("No hay facturas disponibles para auditar en este reporte.")
+            st.stop()
+
         seleccion = st.selectbox(
             "Selecciona una factura para auditar:",
             opciones_fac,
-            index=idx_fac_sel,
+            index=idx_fac_sel if idx_fac_sel < len(opciones_fac) else 0,
             key="sel_factura_auditoria_box"
         )
 
+        if not seleccion:
+            st.stop()
+
         comp_sel = seleccion.split("]")[0].replace("[", "").strip()
         st.session_state["factura_seleccionada_auditoria"] = comp_sel
-        fac_sel = df_p[df_p["Comprobante Siigo"] == comp_sel].iloc[0]
+        m_fac_matches = df_p[df_p["Comprobante Siigo"] == comp_sel]
+        if m_fac_matches.empty:
+            m_fac_matches = df_p
+        fac_sel = m_fac_matches.iloc[0]
         es_aduanero = any(k in fac_sel["Proveedor"].upper() for k in AGENTES_ADUANEROS)
 
         audit_info = fac_sel.get("Audit Info", {})
@@ -4042,7 +4052,7 @@ with tab_triangulacion:
     st.markdown("### 🔀 Paquetes de Importación y Cruce de Cuentas por Pagar")
     st.caption("Separa y concilia cada importación en paquetes individuales: Cobro de Euro Shipping = Factura DHL (Flete) + Factura Agencia Aduanas + Factura Garaje/Almacenadora.")
 
-    if "df_procesado" in st.session_state:
+    if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None and isinstance(st.session_state["df_procesado"], pd.DataFrame) and not st.session_state["df_procesado"].empty:
         df_total = st.session_state["df_procesado"]
         
         # Identificar facturas de comercio exterior / importación de forma segura sin errores de tipos
@@ -5347,7 +5357,7 @@ with tab_siigo:
     st.markdown("### Descargar Planilla Oficial Siigo Nube (3 Hojas)")
     st.caption("Planilla oficial formulada con 'matriz_captura', 'interfaz_siigo' y 'Parametrización'.")
 
-    if "df_procesado" in st.session_state:
+    if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None and isinstance(st.session_state["df_procesado"], pd.DataFrame) and not st.session_state["df_procesado"].empty:
         df_full = st.session_state["df_procesado"]
 
         # FILTRO DE PROTECCIÓN: Excluir facturas rojas (ya causadas en Siigo) y facturas que van por triangulación aduanera
