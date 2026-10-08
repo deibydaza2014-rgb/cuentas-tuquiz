@@ -900,14 +900,16 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
     return df_h2
 
 
-def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_no_deducible=False):
+def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_no_deducible=False, imputar_a_transito=False):
     """
-    Construye el asiento contable completo para un paquete cuando se trae la contabilización de Página 2:
+    Construye el asiento contable para un cobro de agente cuando se trae la contabilización de Página 2:
     1. Si en Hoja 2 se registraron únicamente los Ingresos Propios (Base + IVA < Total Factura):
-       Combina los Ingresos Propios (con su IVA y retenciones) + Facturas de Terceros (cancelación de CxP) +
-       Diferencia de Fletes Internacionales / Cargos en Origen (Cta 14650501) + Crédito total a Euro Shipping (22050501).
-       Garantiza que el total del comprobante sume exactamente el 100% del cobro facturado ($2,912,444.08).
-    2. Si en Hoja 2 ya abarca el 100% del cobro facturado, mantiene la fidelidad exacta de Hoja 2.
+       Combina los Ingresos Propios (con su IVA y retenciones) + Facturas de Terceros vinculadas (cancelación de CxP) +
+       Crédito total al Agente Aduanero (22050501).
+    2. El saldo de ingresos para terceros NO se imputa automáticamente a ninguna cuenta de gasto ni tránsito.
+       Se deja PENDIENTE para que el usuario concilie con facturas de terceros o decida explícitamente enviarlo a No Deducibles o a Tránsito.
+    3. Si el usuario selecciona 'No Deducibles', imputa el saldo a 53950501.
+    4. Si el usuario selecciona 'Mercancías en Tránsito', imputa el saldo a 14650501.
     """
     df_h2 = obtener_asiento_contable_hoja2(agente_row, es_aduanero=False)
     
@@ -967,15 +969,17 @@ def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_n
                 "Débito ($)": dif_terceros,
                 "Crédito ($)": 0.0
             })
-        else:
+        elif imputar_a_transito:
             filas_ajuste.append({
                 "Código Cuenta": CUENTA_IMPORTACION_TRANSITO,
-                "Descripción Cuenta": f"Fletes Internacionales / Cargos en Origen (Fac {agente_row.get('Factura', '')})",
-                "Descripción de la Cuenta": f"Fletes Internacionales / Cargos en Origen (Fac {agente_row.get('Factura', '')})",
+                "Descripción Cuenta": f"Mercancías en Tránsito / Saldo Faltante (Fac {agente_row.get('Factura', '')})",
+                "Descripción de la Cuenta": f"Mercancías en Tránsito / Saldo Faltante (Fac {agente_row.get('Factura', '')})",
                 "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
                 "Débito ($)": dif_terceros,
                 "Crédito ($)": 0.0
             })
+        # Si ni enviar_a_no_deducible ni imputar_a_transito están activos, NO se agrega ninguna fila de ajuste:
+        # SE DEJA PENDIENTE PARA QUE EL USUARIO CONCILIE FACTURAS O DECIDA ENVIARLO A TRÁNSITO / NO DEDUCIBLE.
             
     # Crédito total por pagar al Agente Aduanero (Euro Shipping)
     asume_ret = bool(agente_row.get("Impuestos Asumidos", False))
@@ -992,7 +996,8 @@ def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_n
     
     asiento_final = filas_propias + filas_terceros + filas_ajuste + filas_credito
     df_res = pd.DataFrame(asiento_final)
-    return df_res, 0.0
+    dif_pendiente = dif_terceros if (not enviar_a_no_deducible and not imputar_a_transito) else 0.0
+    return df_res, dif_pendiente
 
 def generar_asiento_triangulacion_paquete(agente_row, terceros_df, enviar_a_no_deducible=False, enviar_a_gastos_propios=False, enviar_a_hoja2=False, **kwargs):
     """
@@ -4261,21 +4266,40 @@ with tab_triangulacion:
                         paquete_activo["agente"] = agente_actual
 
                 tot_agente_actual = float(agente_actual.get("Total", 0.0))
+                base_prop_actual = float(agente_actual.get("Base", 0.0))
+                iva_prop_actual = float(agente_actual.get("IVA", 0.0))
+                subtot_prop_actual = round(base_prop_actual + iva_prop_actual, 2)
+                saldo_terceros_esperado_act = round(tot_agente_actual - subtot_prop_actual, 2)
 
                 # Tratamiento contable y asiento de partida doble del paquete
                 enviar_h2_activo = bool(st.session_state.get(f"enviar_h2_pq_{pq_id_sel}", False))
                 enviar_gp_activo = bool(st.session_state.get(f"enviar_gp_pq_{pq_id_sel}", False))
                 enviar_nd_activo = bool(st.session_state.get(f"enviar_nd_pq_{pq_id_sel}", False))
 
-                df_prev, dif_faltante_prev, ret_prev = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
+                suma_terceros_cxp_act = sum([float(r.get("Total Neto", 0.0)) or (float(r.get("Base", 0.0)) + float(r.get("IVA", 0.0))) for _, r in terceros_actual.iterrows()]) if (terceros_actual is not None and not terceros_actual.empty) else 0.0
+
+                if saldo_terceros_esperado_act > 0.05:
+                    dif_faltante_prev = max(0.0, round(saldo_terceros_esperado_act - suma_terceros_cxp_act, 2))
+                    df_prev, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=False, imputar_a_transito=False)
+                    ret_prev = 0.0
+                else:
+                    df_prev, dif_faltante_prev, ret_prev = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
 
                 if st.session_state.get(f"paquete_listo_{pq_id_sel}", False) and (f"asiento_fijo_pq_{pq_id_sel}" in st.session_state or "asiento_fijo" in paquete_activo):
                     df_asiento_paquete = st.session_state.get(f"asiento_fijo_pq_{pq_id_sel}", paquete_activo.get("asiento_fijo")).copy()
                     dif_no_ded = 0.0
                     ret_asum = 0.0
-                elif enviar_h2_activo:
-                    df_asiento_paquete, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
-                    dif_no_ded = 0.0
+                elif saldo_terceros_esperado_act > 0.05 or enviar_h2_activo:
+                    # Facturas con ingresos propios y de terceros (o con solicitud explícita de traer de Página 2)
+                    if enviar_nd_activo:
+                        df_asiento_paquete, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=True, imputar_a_transito=False)
+                        dif_no_ded = dif_faltante_prev
+                    elif enviar_gp_activo:
+                        df_asiento_paquete, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=False, imputar_a_transito=True)
+                        dif_no_ded = 0.0
+                    else:
+                        # Dejar pendiente para conciliar con facturas de terceros (DECISIÓN DEL USUARIO)
+                        df_asiento_paquete, dif_no_ded = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=False, imputar_a_transito=False)
                     ret_asum = 0.0
                 elif enviar_gp_activo and dif_faltante_prev > 0.05:
                     df_asiento_paquete, _, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
@@ -4572,7 +4596,143 @@ with tab_triangulacion:
                 st.markdown("---")
                 
                 # 2. SECCIÓN PARA AGREGAR NUEVAS FACTURAS
-                st.markdown("##### ➕ Añadir una factura a este paquete:")
+                # 2.1 SUGERENCIAS INTELIGENTES DE FACTURAS PARA INGRESOS DE TERCEROS
+                if dif_faltante_prev > 0.05:
+                    st.markdown(
+                        f"""
+                        <div style="background:#f0fdf4; border:1.5px solid #22c55e; border-radius:8px; padding:12px 16px; margin:10px 0 16px 0;">
+                            <h5 style="margin:0 0 4px 0; color:#15803d;">🔎 Facturas Sugeridas para Ingresos de Terceros (Faltante Pendiente: ${dif_faltante_prev:,.2f}):</h5>
+                            <p style="margin:0 0 8px 0; font-size:13px; color:#166534;">
+                                Facturas libres en el sistema que <b>no superan el monto de la factura (${tot_agente_actual:,.2f})</b> ni el <b>monto de terceros (${saldo_terceros_esperado_act if saldo_terceros_esperado_act > 0.05 else tot_agente_actual:,.2f})</b>, analizadas por concordancia de fletes, cargos, fecha y proveedor:
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    
+                    # Construir pool de sugerencias
+                    cands_sug_list = []
+                    f_ag_dt_sug = pd.to_datetime(agente_actual.get("Fecha", ""), dayfirst=True, errors="coerce")
+                    monto_limite_fac = tot_agente_actual + 0.05
+                    monto_limite_terc = (saldo_terceros_esperado_act if saldo_terceros_esperado_act > 0.05 else tot_agente_actual) + 0.05
+                    
+                    for _, tr_cand_s in cands_disp_agregar.iterrows():
+                        f_c_num = str(tr_cand_s["Factura"]).strip()
+                        if f_c_num in facs_en_este or f_c_num in facturas_bloqueadas_validadas or not f_c_num:
+                            continue
+                            
+                        sc_cand_val = float(tr_cand_s.get("Total Neto", 0.0)) or (float(tr_cand_s.get("Base", 0.0)) + float(tr_cand_s.get("IVA", 0.0)))
+                        if sc_cand_val <= 0.0:
+                            continue
+                            
+                        # REGLA ESTRICTA: Que no superen el monto de la factura ni el monto de los ingresos para terceros
+                        if sc_cand_val > monto_limite_fac or sc_cand_val > monto_limite_terc or sc_cand_val > (dif_faltante_prev + 0.05):
+                            continue
+                            
+                        prov_u = str(tr_cand_s.get("Proveedor", "")).upper()
+                        fec_str = str(tr_cand_s.get("Fecha", ""))
+                        fec_dt = pd.to_datetime(fec_str, dayfirst=True, errors="coerce")
+                        diff_dias = int((fec_dt - f_ag_dt_sug).days) if (pd.notna(fec_dt) and pd.notna(f_ag_dt_sug)) else 999
+                        
+                        tags_sug = []
+                        score_sug = 0
+                        
+                        # Coincidencias específicas con los ítems de ingresos por terceros
+                        if abs(sc_cand_val - 1079157.20) < 50000:
+                            tags_sug.append("✈️ Flete Internacional (~$1.08M)")
+                            score_sug += 180 - (abs(sc_cand_val - 1079157.20) / 1000)
+                        elif abs(sc_cand_val - 1463264.00) < 50000:
+                            tags_sug.append("🏢 Cargos en Origen (~$1.46M)")
+                            score_sug += 180 - (abs(sc_cand_val - 1463264.00) / 1000)
+                        elif abs(sc_cand_val - dif_faltante_prev) < 5000:
+                            tags_sug.append(f"🎯 Cuadre Exacto (${dif_faltante_prev:,.2f})")
+                            score_sug += 250
+                        elif sc_cand_val <= dif_faltante_prev + 0.05:
+                            tags_sug.append(f"🧩 Cubre {(sc_cand_val / dif_faltante_prev * 100):.1f}% del faltante")
+                            score_sug += 60
+                            
+                        if abs(diff_dias) <= 15:
+                            tags_sug.append(f"📅 Mismo período ({diff_dias:+d}d)" if diff_dias != 0 else "🟢 Mismo día")
+                            score_sug += 60
+                        elif -35 <= diff_dias <= 5:
+                            tags_sug.append(f"📅 Despacho ({abs(diff_dias)}d antes)")
+                            score_sug += 40
+                            
+                        if any(k in prov_u for k in ["DHL", "CARGO", "ADUANA", "GARAJE", "ALMAVIVA", "ALMACENADORA", "UPS", "FEDEX", "FLETE", "TRANSPORTE", "PUERTO", "TERMINAL"]):
+                            tags_sug.append("🚢 Logística/Aduana")
+                            score_sug += 50
+                            
+                        cands_sug_list.append({
+                            "Factura": f_c_num,
+                            "Proveedor": tr_cand_s.get("Proveedor", "")[:32],
+                            "Fecha": fec_str,
+                            "Saldo": sc_cand_val,
+                            "Dias": diff_dias,
+                            "Tags": " • ".join(tags_sug) if tags_sug else "⚪ Factura Libre",
+                            "Score": score_sug,
+                            "Row": tr_cand_s
+                        })
+                        
+                    cands_sug_list.sort(key=lambda x: x["Score"], reverse=True)
+                    
+                    # Detectar parejas de facturas que sumen al faltante
+                    pareja_match = None
+                    for i_p in range(min(15, len(cands_sug_list))):
+                        for j_p in range(i_p + 1, min(15, len(cands_sug_list))):
+                            c1_p = cands_sug_list[i_p]
+                            c2_p = cands_sug_list[j_p]
+                            s_pair = round(c1_p["Saldo"] + c2_p["Saldo"], 2)
+                            d_pair = abs(s_pair - dif_faltante_prev)
+                            if d_pair < 50000:
+                                pareja_match = (d_pair, s_pair, c1_p, c2_p)
+                                break
+                        if pareja_match:
+                            break
+                            
+                    if pareja_match:
+                        dp, sp, cp1, cp2 = pareja_match
+                        col_par1, col_par2 = st.columns([3.2, 1.2])
+                        with col_par1:
+                            st.markdown(
+                                f"<div style='background:#fefce8; border:1px solid #eab308; border-radius:6px; padding:8px 12px; margin-bottom:8px;'>"
+                                f"💡 <b>Combinación de 2 Facturas Sugerida:</b> <code>{cp1['Factura']}</code> ({cp1['Proveedor']}, ${cp1['Saldo']:,.2f}) + <code>{cp2['Factura']}</code> ({cp2['Proveedor']}, ${cp2['Saldo']:,.2f})<br>"
+                                f"<span style='font-size:12px; color:#854d0e;'>Suma Combinada: <b>${sp:,.2f}</b> (Diferencia: <b>${dp:,.2f}</b>)</span></div>",
+                                unsafe_allow_html=True
+                            )
+                        with col_par2:
+                            st.write("")
+                            if st.button("➕ Añadir Ambas Facturas", key=f"btn_add_pair_{pq_id_sel}", type="primary", use_container_width=True):
+                                terceros_nuevo = pd.concat([terceros_actual, pd.DataFrame([cp1["Row"], cp2["Row"]])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
+                                st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_nuevo
+                                st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                                st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                                guardar_estado_manual(empresa)
+                                st.success(f"¡Facturas {cp1['Factura']} y {cp2['Factura']} añadidas con éxito al Paquete #{pq_id_sel}!")
+                                st.rerun()
+
+                    if cands_sug_list:
+                        top_cands = cands_sug_list[:6]
+                        for idx_sug, sug_item in enumerate(top_cands):
+                            c_sug1, c_sug2, c_sug3 = st.columns([1.5, 3.2, 1.1])
+                            with c_sug1:
+                                st.markdown(f"<b>{sug_item['Factura']}</b><br><span style='font-size:12px; color:#475569;'>{sug_item['Fecha']}</span>", unsafe_allow_html=True)
+                            with c_sug2:
+                                st.markdown(f"<b>{sug_item['Proveedor']}</b> — <b style='color:#0369a1;'>${sug_item['Saldo']:,.2f}</b><br><span style='font-size:12px; color:#15803d;'>{sug_item['Tags']}</span>", unsafe_allow_html=True)
+                            with c_sug3:
+                                st.write("")
+                                if st.button("➕ Añadir", key=f"btn_sug_add_{pq_id_sel}_{idx_sug}", use_container_width=True):
+                                    terceros_nuevo = pd.concat([terceros_actual, pd.DataFrame([sug_item["Row"]])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
+                                    st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_nuevo
+                                    st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                                    st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                                    guardar_estado_manual(empresa)
+                                    st.success(f"¡Factura {sug_item['Factura']} añadida al Paquete #{pq_id_sel}!")
+                                    st.rerun()
+                    else:
+                        st.info(f"No se encontraron facturas sugeridas que no superen el monto de terceros (${monto_limite_terc:,.2f}) ni estén bloqueadas.")
+                    st.markdown("---")
+
+                st.markdown("##### ➕ Añadir Manualmente otra Factura Libre a este paquete:")
                 # Facturas de terceros disponibles (tanto de df_terceros_all como de df_total no asignadas)
                 opciones_agregar = []
                 mapa_agregar = {}
@@ -4619,8 +4779,6 @@ with tab_triangulacion:
             enviar_gp_activo = bool(st.session_state.get(f"enviar_gp_pq_{pq_id_sel}", False))
             enviar_nd_activo = bool(st.session_state.get(f"enviar_nd_pq_{pq_id_sel}", False))
 
-            df_prev, dif_faltante_prev, ret_prev = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
-
             c_box_style_t = (
                 '<div style="background:#f8fafc; border:2px solid #0070ba; border-radius:8px; padding:14px; margin:14px 0 10px 0;">'
                 '<h4 style="margin:0 0 4px 0; color:#0070ba;">⚖️ Tratamiento Contable para el Paquete #' + str(pq_id_sel) + ' (Cobro ' + str(agente_actual.get('Proveedor', '')) + '):</h4>'
@@ -4632,22 +4790,22 @@ with tab_triangulacion:
             c_btn_h2, c_btn_mt, c_btn_nd = st.columns([1.8, 1.6, 1.2])
 
             with c_btn_h2:
-                st.markdown("<b style='color:#16a34a;'>📋 Opción 1: Traer de Página 2</b><br><span style='font-size:12px; color:#475569;'>Trae la contabilización fiel registrada en la Página 2 (Auditoría):</span>", unsafe_allow_html=True)
-                btn_h2_type = "primary" if enviar_h2_activo else "secondary"
-                if st.button("📋 Traer Contabilización de Página 2", key=f"btn_h2_act_{pq_id_sel}", type=btn_h2_type, use_container_width=True):
+                st.markdown("<b style='color:#16a34a;'>📋 Opción 1: Traer de Página 2</b><br><span style='font-size:12px; color:#475569;'>Trae ingresos propios y deja saldo de terceros pendiente para conciliar:</span>", unsafe_allow_html=True)
+                btn_h2_type = "primary" if (enviar_h2_activo or not (enviar_gp_activo or enviar_nd_activo)) else "secondary"
+                if st.button("📋 Traer de Página 2 (Dejar Pendiente)", key=f"btn_h2_act_{pq_id_sel}", type=btn_h2_type, use_container_width=True):
                     st.session_state[f"enviar_h2_pq_{pq_id_sel}"] = True
                     st.session_state[f"enviar_gp_pq_{pq_id_sel}"] = False
                     st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                    df_as_act, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
                     if st.session_state.get(f"paquete_listo_{pq_id_sel}", False):
+                        df_as_act, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=False, imputar_a_transito=False)
                         st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_as_act.copy()
                         paquete_activo["asiento_fijo"] = df_as_act.copy()
                         ag_fac_str = str(agente_actual["Factura"]).strip()
                         st.session_state.setdefault("asientos_triangulacion_por_factura", {})[ag_fac_str] = df_as_act.copy()
                         guardar_estado_manual(empresa)
-                    st.success("¡Contabilización de la Página 2 aplicada a este paquete!")
+                    st.success("¡Contabilización de Página 2 aplicada! El saldo de terceros queda pendiente para conciliar con facturas.")
                     st.rerun()
 
             with c_btn_mt:
@@ -4660,20 +4818,23 @@ with tab_triangulacion:
                     st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = False
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                    df_as_act, _, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
-                    asiento_gp_filas = []
-                    for _, r_as in df_as_act.iterrows():
-                        if str(r_as["Código Cuenta"]).strip() == CUENTA_NO_DEDUCIBLE:
-                            asiento_gp_filas.append({
-                                "Código Cuenta": CUENTA_IMPORTACION_TRANSITO,
-                                "Descripción Cuenta": f"Mercancías en Tránsito / Base Propia Agente (Fac {agente_actual.get('Factura', '')})",
-                                "Tercero / NIT": f"{agente_actual.get('NIT Emisor', '')} - {agente_actual.get('Proveedor', '')[:25]}",
-                                "Débito ($)": float(r_as["Débito ($)"]),
-                                "Crédito ($)": 0.0
-                            })
-                        else:
-                            asiento_gp_filas.append(r_as.to_dict())
-                    df_as_act = pd.DataFrame(asiento_gp_filas)
+                    if saldo_terceros_esperado_act > 0.05 or enviar_h2_activo:
+                        df_as_act, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=False, imputar_a_transito=True)
+                    else:
+                        df_as_act, _, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
+                        asiento_gp_filas = []
+                        for _, r_as in df_as_act.iterrows():
+                            if str(r_as["Código Cuenta"]).strip() == CUENTA_NO_DEDUCIBLE:
+                                asiento_gp_filas.append({
+                                    "Código Cuenta": CUENTA_IMPORTACION_TRANSITO,
+                                    "Descripción Cuenta": f"Mercancías en Tránsito / Base Propia Agente (Fac {agente_actual.get('Factura', '')})",
+                                    "Tercero / NIT": f"{agente_actual.get('NIT Emisor', '')} - {agente_actual.get('Proveedor', '')[:25]}",
+                                    "Débito ($)": float(r_as["Débito ($)"]),
+                                    "Crédito ($)": 0.0
+                                })
+                            else:
+                                asiento_gp_filas.append(r_as.to_dict())
+                        df_as_act = pd.DataFrame(asiento_gp_filas)
                     if st.session_state.get(f"paquete_listo_{pq_id_sel}", False):
                         st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_as_act.copy()
                         paquete_activo["asiento_fijo"] = df_as_act.copy()
@@ -4685,14 +4846,18 @@ with tab_triangulacion:
 
             with c_btn_nd:
                 st.markdown("<b style='color:#b91c1c;'>🔴 Opción 3: No Deducibles</b><br><span style='font-size:12px; color:#475569;'>Si no existe factura DIAN ni soporte:</span>", unsafe_allow_html=True)
+                lbl_btn_nd = f"🔴 No Deducibles (${dif_faltante_prev:,.2f})" if dif_faltante_prev > 0.05 else "🔴 No Deducibles (53950501)"
                 btn_nd_type = "primary" if enviar_nd_activo else "secondary"
-                if st.button(f"🔴 No Deducibles (53950501)", key=f"btn_nd_act_{pq_id_sel}", type=btn_nd_type, use_container_width=True):
+                if st.button(lbl_btn_nd, key=f"btn_nd_act_{pq_id_sel}", type=btn_nd_type, use_container_width=True):
                     st.session_state[f"enviar_nd_pq_{pq_id_sel}"] = True
                     st.session_state[f"enviar_gp_pq_{pq_id_sel}"] = False
                     st.session_state[f"enviar_h2_pq_{pq_id_sel}"] = False
                     st.session_state["paquete_seleccionado_id"] = pq_id_sel
                     st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                    df_as_act, _, _ = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=True)
+                    if saldo_terceros_esperado_act > 0.05 or enviar_h2_activo:
+                        df_as_act, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=True, imputar_a_transito=False)
+                    else:
+                        df_as_act, _, _ = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=True)
                     if st.session_state.get(f"paquete_listo_{pq_id_sel}", False):
                         st.session_state[f"asiento_fijo_pq_{pq_id_sel}"] = df_as_act.copy()
                         paquete_activo["asiento_fijo"] = df_as_act.copy()
@@ -4702,17 +4867,22 @@ with tab_triangulacion:
                     st.success("¡Faltante enviado a Gastos No Deducibles (53950501)!")
                     st.rerun()
 
-            # CALCULAR ASIENTO CONTABLE SEGÚN TRATAMIENTO SELECCIONADO
+            # RECALCULAR ASIENTO CONTABLE PARA ESTE PAQUETE
             if st.session_state.get(f"paquete_listo_{pq_id_sel}", False) and (f"asiento_fijo_pq_{pq_id_sel}" in st.session_state or "asiento_fijo" in paquete_activo):
                 df_asiento_paquete = st.session_state.get(f"asiento_fijo_pq_{pq_id_sel}", paquete_activo.get("asiento_fijo")).copy()
                 dif_no_ded = 0.0
                 ret_asum = 0.0
-            elif enviar_h2_activo:
-                df_asiento_paquete, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=enviar_nd_activo)
-                dif_no_ded = 0.0
+            elif saldo_terceros_esperado_act > 0.05 or enviar_h2_activo:
+                if enviar_nd_activo:
+                    df_asiento_paquete, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=True, imputar_a_transito=False)
+                    dif_no_ded = dif_faltante_prev
+                elif enviar_gp_activo:
+                    df_asiento_paquete, _ = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=False, imputar_a_transito=True)
+                    dif_no_ded = 0.0
+                else:
+                    df_asiento_paquete, dif_no_ded = generar_asiento_mixto_hoja2_con_terceros(agente_actual, terceros_actual, enviar_a_no_deducible=False, imputar_a_transito=False)
                 ret_asum = 0.0
             elif enviar_gp_activo and dif_faltante_prev > 0.05:
-                # Asiento con imputación a Mercancías en Tránsito (14650501)
                 df_asiento_paquete, _, ret_asum = generar_asiento_triangulacion_paquete(agente_actual, terceros_actual, enviar_a_no_deducible=False)
                 asiento_gp_filas = []
                 for _, r_as in df_asiento_paquete.iterrows():
@@ -4761,7 +4931,17 @@ with tab_triangulacion:
                 if dif_cuad_pq < 0.05:
                     st.success(f"✅ **Partida doble cuadrada al centavo ($0.00).** Ya puedes validar y bloquear este paquete.")
                 else:
-                    st.warning(f"⚠️ Diferencia de cuadre: ${dif_cuad_pq:,.2f}")
+                    st.markdown(
+                        f"""
+                        <div style="background:#fffbeb; border:2px solid #f59e0b; border-radius:8px; padding:12px 16px; margin:10px 0;">
+                            <span style="font-size:15px; font-weight:bold; color:#b45309;">⏳ Faltante Pendiente de Conciliar por Ingresos para Terceros: ${dif_cuad_pq:,.2f}</span><br>
+                            <span style="font-size:13px; color:#78350f;">
+                                El valor cobrado por cuenta de terceros permanece <b>pendiente de conciliación</b>. Puedes conciliarlo seleccionando las facturas sugeridas arriba, o si decides enviar el saldo faltante a <b>Mercancías en Tránsito (Opción 2)</b> o a <b>No Deducibles (Opción 3)</b>, presiona el botón respectivo en las opciones superiores.
+                            </span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
 
                 col_val1, col_val2 = st.columns([2.8, 1.4])
                 with col_val1:
