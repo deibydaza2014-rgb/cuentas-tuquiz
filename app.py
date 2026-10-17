@@ -6,6 +6,31 @@ import base64
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+try:
+    pd.options.future.infer_string = False
+except Exception:
+    pass
+try:
+    _orig_sd_init = pd.StringDtype.__init__
+    def _compat_sd_init(self, *args, **kwargs):
+        if len(args) >= 1:
+            return _orig_sd_init(self, args[0])
+        return _orig_sd_init(self, **kwargs)
+    pd.StringDtype.__init__ = _compat_sd_init
+except Exception:
+    pass
+
+def _limpiar_dtypes_pyarrow_df(df):
+    if df is None or not isinstance(df, pd.DataFrame):
+        return df
+    for col in df.columns:
+        dt_str = str(df[col].dtype).lower()
+        if "string" in dt_str or "arrow" in dt_str:
+            try:
+                df[col] = df[col].astype(object)
+            except Exception:
+                pass
+    return df
 import openpyxl
 import io
 import zipfile
@@ -61,7 +86,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 import tempfile
 import hashlib
 
-PDF_DISK_CACHE_ROOT = os.path.join(tempfile.gettempdir(), "indumaq_pdf_disk_cache")
+PDF_DISK_CACHE_ROOT = os.path.join(DATA_DIR, "_pdf_disk_cache")
 os.makedirs(PDF_DISK_CACHE_ROOT, exist_ok=True)
 ZIP_FACTURAS_DISK_PATH = os.path.join(PDF_DISK_CACHE_ROOT, "paquete_facturas_actual.zip")
 
@@ -390,12 +415,13 @@ def cargar_estado_manual(empresa_dict):
         df_p_path = os.path.join(d, "df_procesado.pkl")
         if os.path.exists(df_p_path):
             with open(df_p_path, "rb") as f:
-                st.session_state["df_procesado"] = pickle.load(f)
+                st.session_state["df_procesado"] = normalizar_df_procesado(_limpiar_dtypes_pyarrow_df(pickle.load(f)))
             pq_path = os.path.join(d, "paquetes_importacion.pkl")
             if os.path.exists(pq_path):
                 with open(pq_path, "rb") as f:
                     pqs_loaded = pickle.load(f)
                     st.session_state["paquetes_importacion"] = pqs_loaded
+                    st.session_state["_ultimo_agentes_len"] = len(pqs_loaded)
                     for pq_k, pq_v in pqs_loaded.items():
                         if isinstance(pq_v, dict):
                             if "asiento_fijo" in pq_v or "asiento_aprobado" in pq_v:
@@ -1522,8 +1548,8 @@ def escanear_regimen_texto_pdf(texto, nit_emisor=None):
     es_rst = False
     if re.search(r'\b[O0]-47\b', txt_norm):
         es_rst = True
-    elif re.search(r'R[E\u00c9]GIMEN\s+SIMPLE|SIMPLE\s+DE\s+TRIBUTACI[O\u00d3]N|\bRST\b', txt_norm):
-        if not re.search(r'(?:NO\s+(?:SOMOS\s+)?|NI\s+)(?:R[E\u00c9]GIMEN\s+SIMPLE|RST)', txt_norm):
+    elif re.search('R[E\u00c9]GIMEN\\s+SIMPLE|SIMPLE\\s+DE\\s+TRIBUTACI[O\u00d3]N|\\bRST\\b', txt_norm):
+        if not re.search('(?:NO\\s+(?:SOMOS\\s+)?|NI\\s+)(?:R[E\u00c9]GIMEN\\s+SIMPLE|RST)', txt_norm):
             es_rst = True
 
     # 5. No Responsable de IVA (O-49 / 0-49)
@@ -2323,7 +2349,7 @@ def buscar_y_extraer_pdf(fac_sel, dict_renombrados=None, dict_originales=None, e
                     if identificar_factura_en_texto(txt, df_una_fac) is not None:
                         if p_idx not in pags_coincidentes:
                             pags_coincidentes.append(p_idx)
-                        m_p = re.search(r'(?:P[\u00c1A\u00e1a]G(?:INA)?|HOJA|PAGE)\s*[:\.]?\s*1\s*(?:DE|/|OF)\s*(\d+)', txt, re.IGNORECASE)
+                        m_p = re.search('(?:P[\u00c1A\u00e1a]G(?:INA)?|HOJA|PAGE)\\s*[:\\.]?\\s*1\\s*(?:DE|/|OF)\\s*(\\d+)', txt, re.IGNORECASE)
                         if m_p:
                             try:
                                 total_h = int(m_p.group(1))
@@ -2624,6 +2650,7 @@ def generar_respaldo_portatil_bytes(empresa_dict):
             # 5. estado_sesion
             estado_flags = {
                 "paquetes_listos": {k: v for k, v in st.session_state.items() if k.startswith("paquete_listo_")},
+                "paquetes_destino_siigo": {k: v for k, v in st.session_state.items() if k.startswith("paquete_destino_siigo_")},
                 "enviar_gp": {k: v for k, v in st.session_state.items() if k.startswith("enviar_gp_pq_")},
                 "enviar_h2": {k: v for k, v in st.session_state.items() if k.startswith("enviar_h2_pq_")},
                 "enviar_nd": {k: v for k, v in st.session_state.items() if k.startswith("enviar_nd_pq_")},
@@ -2656,10 +2683,18 @@ def generar_respaldo_portatil_bytes(empresa_dict):
     except Exception:
         return None
 
-def restaurar_desde_respaldo_bytes(empresa_dict, raw_zip_bytes):
+def restaurar_desde_respaldo_bytes(empresa_dict, raw_zip_or_file):
     """Restaura un archivo de respaldo port\u00e1til (.indumaq o .zip) directamente a la sesi\u00f3n activa con facturas, paquetes y PDFs."""
     try:
-        with zipfile.ZipFile(io.BytesIO(raw_zip_bytes), "r") as zf:
+        if hasattr(raw_zip_or_file, "seek"):
+            raw_zip_or_file.seek(0)
+            zf_source = raw_zip_or_file
+        elif isinstance(raw_zip_or_file, (bytes, bytearray)):
+            zf_source = io.BytesIO(raw_zip_or_file)
+        else:
+            zf_source = io.BytesIO(raw_zip_or_file.read())
+
+        with zipfile.ZipFile(zf_source, "r") as zf:
             namelist = zf.namelist()
             if "memoria_aprendizaje.json" in namelist:
                 try:
@@ -2673,21 +2708,44 @@ def restaurar_desde_respaldo_bytes(empresa_dict, raw_zip_bytes):
                 except Exception:
                     pass
             if "df_procesado.pkl" in namelist:
-                st.session_state["df_procesado"] = pickle.loads(zf.read("df_procesado.pkl"))
+                df_loaded = pickle.loads(zf.read("df_procesado.pkl"))
+                st.session_state["df_procesado"] = normalizar_df_procesado(_limpiar_dtypes_pyarrow_df(df_loaded))
             if "excel_original.xlsx" in namelist:
                 st.session_state["excel_bytes"] = zf.read("excel_original.xlsx")
-            if "paquete_facturas.zip" in namelist:
-                with open(ZIP_FACTURAS_DISK_PATH, "wb") as fz:
-                    fz.write(zf.read("paquete_facturas.zip"))
-                st.session_state["zip_pdfs_path"] = ZIP_FACTURAS_DISK_PATH
-                st.session_state["zip_pdfs"] = None
-            if "paquetes_importacion.pkl" in namelist:
-                st.session_state["paquetes_importacion"] = pickle.loads(zf.read("paquetes_importacion.pkl"))
             if "asientos_triangulacion.pkl" in namelist:
-                st.session_state["asientos_triangulacion_por_factura"] = pickle.loads(zf.read("asientos_triangulacion.pkl"))
+                as_loaded = pickle.loads(zf.read("asientos_triangulacion.pkl"))
+                if isinstance(as_loaded, dict):
+                    for k_as, v_as in as_loaded.items():
+                        if isinstance(v_as, pd.DataFrame):
+                            as_loaded[k_as] = _limpiar_dtypes_pyarrow_df(v_as)
+                st.session_state["asientos_triangulacion_por_factura"] = as_loaded
+            if "paquetes_importacion.pkl" in namelist:
+                pqs_loaded = pickle.loads(zf.read("paquetes_importacion.pkl"))
+                if isinstance(pqs_loaded, dict):
+                    as_map = st.session_state.get("asientos_triangulacion_por_factura", {})
+                    for pq_k, pq_v in pqs_loaded.items():
+                        if isinstance(pq_v, dict):
+                            if "terceros" in pq_v and isinstance(pq_v["terceros"], pd.DataFrame):
+                                pq_v["terceros"] = _limpiar_dtypes_pyarrow_df(pq_v["terceros"])
+                            for af_k in ["asiento_fijo", "asiento_aprobado"]:
+                                if af_k in pq_v and isinstance(pq_v[af_k], pd.DataFrame):
+                                    pq_v[af_k] = _limpiar_dtypes_pyarrow_df(pq_v[af_k])
+                            if ("asiento_fijo" in pq_v and pq_v["asiento_fijo"] is not None) or ("asiento_aprobado" in pq_v and pq_v["asiento_aprobado"] is not None):
+                                st.session_state[f"paquete_listo_{pq_k}"] = True
+                                st.session_state[f"asiento_fijo_pq_{pq_k}"] = pq_v.get("asiento_fijo", pq_v.get("asiento_aprobado")).copy()
+                            ag_fac_str = str(pq_v.get("agente", {}).get("Factura", "")).strip()
+                            if "destino_siigo" in pq_v and pq_v["destino_siigo"] is not None:
+                                st.session_state[f"paquete_destino_siigo_{pq_k}"] = bool(pq_v["destino_siigo"])
+                            elif ag_fac_str and ag_fac_str in as_map:
+                                st.session_state[f"paquete_destino_siigo_{pq_k}"] = True
+                                pq_v["destino_siigo"] = True
+                    st.session_state["paquetes_importacion"] = pqs_loaded
+                    st.session_state["_ultimo_agentes_len"] = len(pqs_loaded)
             if "estado_sesion.json" in namelist:
                 est = json.loads(zf.read("estado_sesion.json").decode("utf-8"))
                 for k, v in est.get("paquetes_listos", {}).items():
+                    st.session_state[k] = v
+                for k, v in est.get("paquetes_destino_siigo", {}).items():
                     st.session_state[k] = v
                 for k, v in est.get("enviar_gp", {}).items():
                     st.session_state[k] = v
@@ -2699,6 +2757,7 @@ def restaurar_desde_respaldo_bytes(empresa_dict, raw_zip_bytes):
                     st.session_state["facturas_no_contabilizar"] = set(est["facturas_no_contabilizar"])
                 if "sel_paquete_activo_key" in est:
                     st.session_state["sel_paquete_activo_key"] = est["sel_paquete_activo_key"]
+                    st.session_state["paquete_seleccionado_id"] = est["sel_paquete_activo_key"]
             if "meta.json" in namelist:
                 meta = json.loads(zf.read("meta.json").decode("utf-8"))
                 st.session_state["excel_nombre"] = meta.get("archivo_excel", meta.get("excel_nombre", "Reporte.xlsx"))
@@ -2708,29 +2767,41 @@ def restaurar_desde_respaldo_bytes(empresa_dict, raw_zip_bytes):
                 st.session_state["excel_nombre"] = meta.get("excel_nombre", meta.get("archivo_excel", "Reporte.xlsx"))
                 st.session_state["_sesion_cargada_nombre"] = f"Respaldo {meta.get('fecha_respaldo', '')}"
 
-            # Restaurar PDFs directamente en disco (0 MB en RAM)
+            # Restaurar PDFs directamente en disco (0 MB en RAM), evitando duplicar si ya existen renombrados
             dict_renom = DiskBackedPDFDict("renom_pdfs")
             dict_orig = DiskBackedPDFDict("raw_pdfs")
-            for name in namelist:
-                if name.startswith("pdfs_renombrados/") and name.endswith(".pdf"):
-                    fn = name.replace("pdfs_renombrados/", "")
+            renom_names = [n for n in namelist if n.startswith("pdfs_renombrados/") and n.endswith(".pdf")]
+            orig_names = [n for n in namelist if n.startswith("pdfs_originales/") and n.endswith(".pdf")]
+            for name in renom_names:
+                fn = os.path.basename(name)
+                if fn:
                     dict_renom[fn] = zf.read(name)
-                elif name.startswith("pdfs_originales/") and name.endswith(".pdf"):
-                    fn = name.replace("pdfs_originales/", "")
-                    dict_orig[fn] = zf.read(name)
-            if dict_renom:
+            if not renom_names and orig_names:
+                for name in orig_names:
+                    fn = os.path.basename(name)
+                    if fn:
+                        dict_orig[fn] = zf.read(name)
+            if len(dict_renom) > 0:
                 st.session_state["dict_pdfs"] = dict_renom
                 st.session_state["total_zip_pdfs"] = len(dict_renom)
-            if dict_orig:
+                if len(dict_orig) == 0:
+                    st.session_state["raw_uploaded_pdfs"] = dict_renom
+            if len(dict_orig) > 0:
                 st.session_state["raw_uploaded_pdfs"] = dict_orig
+
+        guardar_estado_manual(empresa_dict)
+        import gc
+        gc.collect()
         return True
     except Exception as e:
+        st.session_state["_ultimo_error_respaldo"] = str(e)
         return False
 
 def normalizar_df_procesado(df):
     """Garantiza que todas las columnas requeridas existan con tipos seguros y sin NaNs que causen ca\u00eddas."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return df
+    df = _limpiar_dtypes_pyarrow_df(df)
     
     defaults_str = {
         "Comprobante Siigo": "Comp 10-001", "Fecha": "01/01/2026", "Factura": "FAC-001",
@@ -2905,24 +2976,36 @@ try:
 
     # PANEL DE HISTORIAL DE TRABAJOS Y RESPALDOS INDESTRUCTIBLES
     trabajos_guardados = listar_trabajos_historial(empresa)
-    panel_expanded = False
+    panel_expanded = ("df_procesado" not in st.session_state or st.session_state["df_procesado"] is None)
     
     with st.expander("\U0001f5c2\ufe0f Historial de Trabajos, Respaldos y Carga R\u00e1pida", expanded=panel_expanded):
         # Restauracion inmediata desde archivo portatil .indumaq
         c_upl_r1, c_upl_r2 = st.columns([3, 1.2])
         with c_upl_r1:
-            upl_indumaq = st.file_uploader("\U0001f4e4 Restaurar desde Archivo de Respaldo (.indumaq):", type=["indumaq", "backup", "zip"], key="upl_respaldo_indumaq", help="Sube tu archivo de respaldo para recuperar al instante exactamente donde lo dejaste.")
+            upl_indumaq = st.file_uploader("\U0001f4e4 Restaurar desde Archivo de Respaldo (.indumaq / .zip):", type=["indumaq", "backup", "zip"], key="upl_respaldo_indumaq", help="Sube tu archivo de respaldo para recuperar al instante exactamente donde lo dejaste.")
+            if upl_indumaq is not None:
+                sig_ind = f"{upl_indumaq.name}_{upl_indumaq.size}"
+                if st.session_state.get("_auto_restored_sig") != sig_ind:
+                    with st.spinner("Restaurando respaldo contable autom\u00e1ticamente..."):
+                        if restaurar_desde_respaldo_bytes(empresa, upl_indumaq):
+                            st.session_state["_auto_restored_sig"] = sig_ind
+                            st.success("\u00a1Respaldo restaurado con \u00e9xito! Todas tus facturas y paquetes quedaron listos.")
+                            st.rerun()
+                        else:
+                            st.error(f"No se pudo leer el archivo de respaldo: {st.session_state.get('_ultimo_error_respaldo', '')}")
         with c_upl_r2:
             st.write("")
             st.write("")
             if upl_indumaq is not None:
-                if st.button("\U0001f680 Restaurar Respaldo", key="btn_ejecutar_restaurar_upl", use_container_width=True):
-                    ok_r = restaurar_desde_respaldo_bytes(empresa, upl_indumaq.read())
+                if st.button("\U0001f680 Restaurar Respaldo", key="btn_ejecutar_restaurar_upl", type="primary", use_container_width=True):
+                    with st.spinner("Restaurando respaldo contable..."):
+                        ok_r = restaurar_desde_respaldo_bytes(empresa, upl_indumaq)
                     if ok_r:
+                        st.session_state["_auto_restored_sig"] = f"{upl_indumaq.name}_{upl_indumaq.size}"
                         st.success("\u00a1Respaldo restaurado con \u00e9xito! Todas tus facturas editadas y paquetes quedaron listos.")
                         st.rerun()
                     else:
-                        st.error("No se pudo leer el archivo de respaldo.")
+                        st.error(f"No se pudo leer el archivo de respaldo: {st.session_state.get('_ultimo_error_respaldo', '')}")
         st.markdown("<hr style='margin:10px 0;'>", unsafe_allow_html=True)
     
         col_h_left, col_h_right = st.columns([1.5, 1])
@@ -2982,12 +3065,18 @@ try:
                 help="Sube tu archivo de respaldo para restaurar exactamente donde lo dejaste."
             )
             if archivo_zip_restaurar is not None:
-                if st.button("\U0001f680 Cargar este Respaldo en Pantalla", key="btn_confirmar_cargar_zip_historial", use_container_width=True):
+                sig_z_r = f"{archivo_zip_restaurar.name}_{archivo_zip_restaurar.size}"
+                if st.session_state.get("_auto_restored_sig") != sig_z_r:
+                    with st.spinner("Restaurando sesi\u00f3n y c\u00e1lculos autom\u00e1ticamente..."):
+                        if restaurar_desde_respaldo_bytes(empresa, archivo_zip_restaurar):
+                            st.session_state["_auto_restored_sig"] = sig_z_r
+                            st.success(f"\u00a1Sesi\u00f3n restaurada con \u00e9xito desde {archivo_zip_restaurar.name}!")
+                            st.rerun()
+                if st.button("\U0001f680 Cargar este Respaldo en Pantalla", key="btn_confirmar_cargar_zip_historial", type="primary", use_container_width=True):
                     with st.spinner("Restaurando sesi\u00f3n y c\u00e1lculos..."):
-                        raw_b = archivo_zip_restaurar.getvalue()
-                        ok_r = restaurar_desde_respaldo_bytes(empresa, raw_b)
+                        ok_r = restaurar_desde_respaldo_bytes(empresa, archivo_zip_restaurar)
                         if not ok_r:
-                            df_res, renom_res, orig_res, ex_b_res, ex_n_res, zip_res = importar_respaldo_sesion_zip(raw_b, empresa)
+                            df_res, renom_res, orig_res, ex_b_res, ex_n_res, zip_res = importar_respaldo_sesion_zip(archivo_zip_restaurar.getvalue(), empresa)
                             if df_res is not None:
                                 st.session_state["df_procesado"] = df_res
                                 st.session_state["dict_pdfs"] = renom_res or {}
@@ -3033,7 +3122,7 @@ try:
             with col_u1:
                 archivo_excel = st.file_uploader("1. Reporte Excel de la DIAN (ej. prueba.xlsx)", type=["xlsx", "xls"], help="Opcional si ya cargaste tu trabajo desde el Historial.")
             with col_u2:
-                archivos_pdfs = st.file_uploader("2. Facturas en PDF o Archivo ZIP Consolidado", type=["pdf", "zip"], accept_multiple_files=True, help="Sube facturas en PDF o un solo archivo .ZIP con todas las facturas (ideal para 100 a 1000+ facturas).")
+                archivos_pdfs = st.file_uploader("2. Facturas en PDF, ZIP Consolidado o Respaldo (.indumaq)", type=["pdf", "zip", "indumaq"], accept_multiple_files=True, help="Sube facturas en PDF, un archivo .ZIP con todas las facturas, o tu archivo de respaldo (.indumaq).")
     
             st.markdown("##### \U0001f522 3. Consecutivos Iniciales por Tipo de Comprobante Siigo:")
             st.caption("Cada tipo de comprobante lleva su propia numeraci\u00f3n independiente. Digita en qu\u00e9 n\u00famero vas en cada uno:")
@@ -3056,6 +3145,11 @@ try:
                         st.session_state["raw_uploaded_pdfs"] = {}
                     import gc
                     for p in archivos_pdfs:
+                        if p.name.lower().endswith(".indumaq"):
+                            if restaurar_desde_respaldo_bytes(empresa, p):
+                                st.success(f"\u00a1Respaldo {p.name} restaurado con \u00e9xito!")
+                                st.rerun()
+                            continue
                         if p.name.lower().endswith(".zip"):
                             try:
                                 with zipfile.ZipFile(io.BytesIO(p.getvalue()), "r") as z_in:
@@ -3625,7 +3719,7 @@ try:
     
                                 # Caso 5: Deteccion inteligente por CUFE, Folio o 'Pagina 1 de N'
                                 else:
-                                    patron_pag = re.compile(r'(?:P[\u00c1A\u00e1a]G(?:INA|\.)?|HOJA|PAGE)\s*(\d+)\s*(?:DE|\/|OF)\s*(\d+)', re.IGNORECASE)
+                                    patron_pag = re.compile('(?:P[\u00c1A\u00e1a]G(?:INA|\\.)?|HOJA|PAGE)\\s*(\\d+)\\s*(?:DE|\\/|OF)\\s*(\\d+)', re.IGNORECASE)
                                     curr_writer = None
                                     curr_inv_row = None
                                     paginas_del_comprobante = 0
@@ -4535,8 +4629,8 @@ try:
     
                 # 4. Descripcion que evidencia gastos de importacion / desaduanamiento
                 REGEX_DESC_IMPORT = (
-                    r"IMPORTACI[O\u00d3]N|AGENCIAMIENTO|ARANCEL|DESADUANAMIENTO|NACIONALIZACI[O\u00d3]N|"
-                    r"BODEGAJE\s*PUERTO|ALMACENAJE\s*ADUANERO|MANDATO\s*ADUANERO|FLETE\s*INTERNACIONAL"
+                    "IMPORTACI[O\u00d3]N|AGENCIAMIENTO|ARANCEL|DESADUANAMIENTO|NACIONALIZACI[O\u00d3]N|"
+                    "BODEGAJE\\s*PUERTO|ALMACENAJE\\s*ADUANERO|MANDATO\\s*ADUANERO|FLETE\\s*INTERNACIONAL"
                 )
                 cond_desc = desc_upper.str.contains(REGEX_DESC_IMPORT, regex=True, na=False)
     
@@ -4776,7 +4870,7 @@ try:
                         return pqs_res, terc_libres_i
     
                     # Inicializar o recuperar paquetes de importacion
-                    if "paquetes_importacion" not in st.session_state or st.session_state.get("_ultimo_agentes_len") != len(df_agentes_all):
+                    if "paquetes_importacion" not in st.session_state or not st.session_state["paquetes_importacion"]:
                         pqs_ini, libres_ini = auto_empaquetar_inteligente(df_agentes_all, df_terceros_all)
                         st.session_state["paquetes_importacion"] = pqs_ini
                         st.session_state["_ultimo_agentes_len"] = len(df_agentes_all)
@@ -6130,7 +6224,7 @@ try:
                                     "",
                                     deb_val,
                                     cred_val,
-                                    f"Cruce Importacion Pq #{p_k} {ag_str(item.get('Proveedor') or 'Tercero')[:15]}",
+                                    f"Cruce Importacion Pq #{p_k} {str(ag_item.get('Proveedor') or 'Agente')[:15]}",
                                     0.0,
                                     0.0,
                                     ""
