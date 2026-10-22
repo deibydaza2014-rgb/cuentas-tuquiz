@@ -2674,9 +2674,24 @@ def generar_respaldo_portatil_bytes(empresa_dict):
             if mem_actual:
                 zf.writestr("memoria_aprendizaje.json", json.dumps(mem_actual, ensure_ascii=False, indent=2))
 
-            # 7. No empaquetar cientos de MB de PDFs en RAM dentro del respaldo .indumaq para evitar caidas por limite de memoria en Streamlit Cloud.
-            # El respaldo .indumaq guarda el 100% de la contabilidad, paquetes, triangulaciones, asientos, exclusiones y memoria de aprendizaje (< 1 MB).
-            pass
+            # 7. Incluir 1 sola copia sin duplicar de los PDFs desbloqueados (ZIP_STORED directo desde disco) para conservar siempre la vista previa
+            d_renom_curr = st.session_state.get("dict_pdfs", {})
+            d_orig_curr = st.session_state.get("raw_uploaded_pdfs", {})
+            fuente_pdfs = d_renom_curr if (d_renom_curr and len(d_renom_curr) > 0) else d_orig_curr
+            if fuente_pdfs:
+                for fn_k in list(fuente_pdfs.keys()):
+                    if not str(fn_k).lower().endswith(".pdf"):
+                        continue
+                    p_disk = fuente_pdfs.get_path(fn_k) if hasattr(fuente_pdfs, "get_path") else None
+                    arc_name = f"pdfs_renombrados/{os.path.basename(str(fn_k))}"
+                    if p_disk and os.path.exists(p_disk):
+                        zf.write(p_disk, arcname=arc_name, compress_type=zipfile.ZIP_STORED)
+                    else:
+                        b_pdf = fuente_pdfs.get(fn_k)
+                        if b_pdf:
+                            zinfo = zipfile.ZipInfo(arc_name)
+                            zinfo.compress_type = zipfile.ZIP_STORED
+                            zf.writestr(zinfo, b_pdf)
 
         buf.seek(0)
         return buf.getvalue()
@@ -3526,11 +3541,10 @@ try:
                     nombres_pdfs_proc = [fn for fn in list(st.session_state["raw_uploaded_pdfs"].keys()) if fn.lower().endswith(".pdf")]
                     if not nombres_pdfs_proc:
                         st.warning("\u26a0\ufe0f No hay archivos PDF para procesar. Por favor sube tus facturas en el campo '2. Facturas en PDF (unificadas o separadas)' arriba antes de hacer clic en desbloquear.")
-                        st.stop()
     
                     total_generados = 0
-                    total_pdfs_count = len(nombres_pdfs_proc)
-                    prog_bar_pdf = st.progress(0, text=f"Iniciando procesamiento liviano de {total_pdfs_count} archivo(s) PDF...")
+                    total_pdfs_count = max(1, len(nombres_pdfs_proc))
+                    prog_bar_pdf = st.progress(0, text=f"Iniciando procesamiento liviano de {len(nombres_pdfs_proc)} archivo(s) PDF...") if nombres_pdfs_proc else st.empty()
     
                     with zipfile.ZipFile(ZIP_FACTURAS_DISK_PATH, "w", zipfile.ZIP_STORED) as zf:
                         for idx_pdf, pdf_name in enumerate(nombres_pdfs_proc):
@@ -3930,19 +3944,15 @@ try:
                     if st.session_state["sel_factura_auditoria_box"] not in opciones_fac and idx_fac_sel < len(opciones_fac):
                         st.session_state["sel_factura_auditoria_box"] = opciones_fac[idx_fac_sel]
     
-                if not opciones_fac:
-                    st.info("No hay facturas disponibles para auditar en este reporte.")
-                    st.stop()
-    
                 seleccion = st.selectbox(
                     "Selecciona una factura para auditar:",
                     opciones_fac,
                     index=idx_fac_sel if idx_fac_sel < len(opciones_fac) else 0,
                     key="sel_factura_auditoria_box"
-                )
+                ) if opciones_fac else None
     
-                if not seleccion:
-                    st.stop()
+                if not seleccion and opciones_fac:
+                    seleccion = opciones_fac[0]
     
                 comp_sel = seleccion.split("]")[0].replace("[", "").strip()
                 st.session_state["factura_seleccionada_auditoria"] = comp_sel
@@ -4362,7 +4372,7 @@ try:
                 st.markdown("### \U0001f50d Vista Previa del Documento Soporte")
                 ver_pdf_ahora = st.checkbox(
                     "\U0001f441\ufe0f Mostrar Documento PDF de esta Factura en Pantalla",
-                    value=False,
+                    value=True,
                     key="chk_ver_pdf_bajo_demanda_tab2",
                     help="Act\u00edvalo cuando quieras ver la imagen del PDF. Mantenerlo desactivado mientras editas cuentas o trabajas en otras pesta\u00f1as evita saturar la memoria RAM en Streamlit Cloud."
                 )
@@ -5227,322 +5237,322 @@ try:
                     with st.expander(f"\u2699\ufe0f Modificar este Paquete #{pq_id_sel} (Sacar Facturas o Agregar Nuevas):", expanded=False if es_validado_este else False):
                         if es_validado_este:
                             st.warning("\u26a0\ufe0f Debes desbloquear el paquete abajo antes de poder agregar o sacar facturas.")
-                            st.stop()
-                        st.caption("Administra las facturas asignadas a esta importaci\u00f3n: saca las que no correspondan o a\u00f1ade nuevas facturas de DHL, Agencia o Garaje:")
-                    
-                        # 1. SECCION PARA SACAR / REDIRIGIR FACTURAS
-                        st.markdown("##### \u2796 Sacar y Redirigir una factura de este paquete:")
-                        st.caption("Si ves una factura que no corresponde a este paquete, s\u00e1cala y el sistema la reubicar\u00e1 autom\u00e1ticamente o la enviar\u00e1 a compras directas para que no quede pendiente:")
-                        facs_en_este = list(terceros_actual["Factura"].unique()) if not terceros_actual.empty else []
-                    
-                        if facs_en_este:
-                            opciones_quitar = []
-                            mapa_quitar_row = {}
-                            for _, tr_k in terceros_actual.iterrows():
-                                tb_k = float(tr_k.get("Base", 0.0))
-                                tiv_k = float(tr_k.get("IVA", 0.0))
-                                sc_k = obtener_saldo_cruce_factura(tr_k)
-                                tag_q = f"[{tr_k['Factura']}] {str(tr_k.get('Proveedor') or 'Tercero')[:24]} (Saldo: ${sc_k:,.2f})"
-                                opciones_quitar.append(tag_q)
-                                mapa_quitar_row[tag_q] = tr_k
-                            
-                            sel_para_quitar = st.selectbox("1. Selecciona la factura que deseas SACAR de este paquete:", ["(Seleccionar...)"] + opciones_quitar, key=f"sel_rem_tr_{pq_id_sel}")
-                        
-                            if sel_para_quitar != "(Seleccionar...)":
-                                fila_a_mover = mapa_quitar_row[sel_para_quitar]
-                                fac_nom_mover = fila_a_mover["Factura"]
-                                sc_mover = obtener_saldo_cruce_factura(fila_a_mover)
-                            
-                                otros_pqs = [p for p in pqs_actuales.keys() if p != pq_id_sel and not st.session_state.get(f"paquete_listo_{p}", False)]
-                            
-                                # Calcular cual otro paquete tiene un faltante mas cercano a esta factura
-                                mejor_pq_sug = None
-                                mejor_diff_sug = float("inf")
-                                for p_cand_id in otros_pqs:
-                                    p_cand = pqs_actuales[p_cand_id]
-                                    tot_ag_c = float(p_cand["agente"]["Total"])
-                                    tot_terc_c = sum([obtener_saldo_cruce_factura(r) for _, r in p_cand["terceros"].iterrows()])
-                                    faltante_c = tot_ag_c - tot_terc_c
-                                    diff_c = abs(faltante_c - sc_mover)
-                                    if diff_c < mejor_diff_sug:
-                                        mejor_diff_sug = diff_c
-                                        mejor_pq_sug = p_cand_id
-                                    
-                                sug_txt = f" (Sugerencia: Paquete #{mejor_pq_sug})" if mejor_pq_sug else ""
-                                opciones_destino = [
-                                    f"\U0001f3af Auto-Reubicar autom\u00e1ticamente donde mejor encaje{sug_txt}",
-                                    "\U0001f4e6 Mover a otro Paquete espec\u00edfico...",
-                                    "\U0001f6d2 Redirigir a Compras Directas Ordinarias (Pesta\u00f1a 1 y 4 - Se pag\u00f3 directo)",
-                                    "\u26aa Dejar libre en inventario (Sin asignar)"
-                                ]
-                            
-                                c_dest1, c_dest2 = st.columns([2.6, 1.2])
-                                with c_dest1:
-                                    dest_sel = st.radio(f"2. \u00bfA d\u00f3nde deseas redirigir la factura {fac_nom_mover}?:", opciones_destino, key=f"rad_dest_{pq_id_sel}_{fac_nom_mover}")
-                                    destino_pq_manual = None
-                                    if "Mover a otro Paquete espec\u00edfico" in dest_sel:
-                                        opciones_otros_pqs = [f"Paquete #{p}: {str(pqs_actuales[p]['agente'].get('Proveedor') or 'Agente')[:16]} (Fac {pqs_actuales[p]['agente']['Factura']})" for p in otros_pqs]
-                                        if opciones_otros_pqs:
-                                            sel_otro_pq_str = st.selectbox("Selecciona el paquete de destino:", opciones_otros_pqs, key=f"sel_otro_pq_{pq_id_sel}")
-                                            destino_pq_manual = int(sel_otro_pq_str.split(":")[0].replace("Paquete #", "").strip())
-                                        else:
-                                            st.info("No hay otros paquetes de forwarders disponibles en este archivo.")
-                                        
-                                with c_dest2:
-                                    st.write("")
-                                    st.write("")
-                                    if st.button("\U0001f680 Sacar y Redirigir Factura", key=f"btn_ejecutar_reubicar_{pq_id_sel}", help="Retira la factura de este paquete y la redirige al destino seleccionado."):
-                                        # 1. Retirar del paquete actual
-                                        terceros_remanente = terceros_actual[terceros_actual["Factura"] != fac_nom_mover].copy()
-                                        st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_remanente
-                                    
-                                        # 2. Redirigir al destino
-                                        if "Auto-Reubicar" in dest_sel and mejor_pq_sug is not None:
-                                            dest_pq = st.session_state["paquetes_importacion"][mejor_pq_sug]["terceros"]
-                                            dest_nuevo = pd.concat([dest_pq, pd.DataFrame([fila_a_mover])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
-                                            st.session_state["paquetes_importacion"][mejor_pq_sug]["terceros"] = dest_nuevo
-                                            st.success(f"\u00a1Factura {fac_nom_mover} retirada del Paquete #{pq_id_sel} y auto-reubicada en el Paquete #{mejor_pq_sug}!")
-                                        elif "Mover a otro Paquete" in dest_sel and destino_pq_manual is not None:
-                                            dest_pq = st.session_state["paquetes_importacion"][destino_pq_manual]["terceros"]
-                                            dest_nuevo = pd.concat([dest_pq, pd.DataFrame([fila_a_mover])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
-                                            st.session_state["paquetes_importacion"][destino_pq_manual]["terceros"] = dest_nuevo
-                                            st.success(f"\u00a1Factura {fac_nom_mover} movida con \u00e9xito al Paquete #{destino_pq_manual}!")
-                                        elif "Compras Directas Ordinarias" in dest_sel:
-                                            if "df_procesado" in st.session_state:
-                                                df_glob = st.session_state["df_procesado"]
-                                                m_idx = df_glob[df_glob["Factura"] == fac_nom_mover].index
-                                                if not m_idx.empty:
-                                                    df_glob.at[m_idx[0], "Es Aduanera"] = False
-                                                    df_glob.at[m_idx[0], "Grupo Importaci\u00f3n"] = ""
-                                                    df_glob.at[m_idx[0], "Estado Registro"] = "\u26aa Compra Directa Ordinaria"
-                                                    df_glob.at[m_idx[0], "Cta Contrapartida"] = "22050501"
-                                                    st.session_state["df_procesado"] = df_glob
-                                            st.success(f"\u00a1Factura {fac_nom_mover} retirada de importaciones y enviada a Compras Directas Ordinarias (Pesta\u00f1a 1 y 4)!")
-                                        else:
-                                            st.success(f"\u00a1Factura {fac_nom_mover} retirada del Paquete #{pq_id_sel} y devuelta a facturas libres!")
-                                    
-                                        st.session_state["paquete_seleccionado_id"] = pq_id_sel
-                                        st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                                        guardar_estado_manual(empresa)
-                                        st.rerun()
                         else:
-                            st.info("Este paquete no tiene facturas asignadas para retirar.")
-                        
-                        st.markdown("---")
+                            st.caption("Administra las facturas asignadas a esta importaci\u00f3n: saca las que no correspondan o a\u00f1ade nuevas facturas de DHL, Agencia o Garaje:")
                     
-                        # 2. SECCION PARA AGREGAR NUEVAS FACTURAS
-                        cands_disp_agregar = df_terceros_all.copy()
-                        f_ag_dt_sug = pd.to_datetime(agente_actual.get("Fecha", ""), dayfirst=True, errors="coerce")
+                            # 1. SECCION PARA SACAR / REDIRIGIR FACTURAS
+                            st.markdown("##### \u2796 Sacar y Redirigir una factura de este paquete:")
+                            st.caption("Si ves una factura que no corresponde a este paquete, s\u00e1cala y el sistema la reubicar\u00e1 autom\u00e1ticamente o la enviar\u00e1 a compras directas para que no quede pendiente:")
+                            facs_en_este = list(terceros_actual["Factura"].unique()) if not terceros_actual.empty else []
                     
-                        # RESTRICCION DE BLOQUEO: Las facturas de paquetes ya validados no se pueden anadir a otros
-                        facturas_bloqueadas_validadas = set()
-                        if "paquetes_importacion" in st.session_state:
-                            for p_k_v, p_dat_v in st.session_state["paquetes_importacion"].items():
-                                if st.session_state.get(f"paquete_listo_{p_k_v}", False):
-                                    df_t_val = p_dat_v.get("terceros")
-                                    if df_t_val is not None and not df_t_val.empty:
-                                        for f_asig in df_t_val["Factura"].dropna():
-                                            facturas_bloqueadas_validadas.add(str(f_asig).strip())
-    
-                        # 2.1 SUGERENCIAS INTELIGENTES DE FACTURAS PARA INGRESOS DE TERCEROS
-                        if dif_faltante_prev > 0.05:
-                            st.markdown(
-                                f"""
-                                <div style="background:#f0fdf4; border:1.5px solid #22c55e; border-radius:8px; padding:12px 16px; margin:10px 0 16px 0;">
-                                    <h5 style="margin:0 0 4px 0; color:#15803d;">\U0001f50e Facturas Sugeridas para Ingresos de Terceros (Faltante Pendiente: ${dif_faltante_prev:,.2f}):</h5>
-                                    <p style="margin:0 0 8px 0; font-size:13px; color:#166534;">
-                                        Facturas libres en el sistema que <b>no superan el monto de la factura (${tot_agente_actual:,.2f})</b> ni el <b>monto de terceros (${saldo_terceros_esperado_act if saldo_terceros_esperado_act > 0.05 else tot_agente_actual:,.2f})</b>, analizadas por concordancia de fletes, cargos, fecha y proveedor:
-                                    </p>
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
+                            if facs_en_este:
+                                opciones_quitar = []
+                                mapa_quitar_row = {}
+                                for _, tr_k in terceros_actual.iterrows():
+                                    tb_k = float(tr_k.get("Base", 0.0))
+                                    tiv_k = float(tr_k.get("IVA", 0.0))
+                                    sc_k = obtener_saldo_cruce_factura(tr_k)
+                                    tag_q = f"[{tr_k['Factura']}] {str(tr_k.get('Proveedor') or 'Tercero')[:24]} (Saldo: ${sc_k:,.2f})"
+                                    opciones_quitar.append(tag_q)
+                                    mapa_quitar_row[tag_q] = tr_k
+                            
+                                sel_para_quitar = st.selectbox("1. Selecciona la factura que deseas SACAR de este paquete:", ["(Seleccionar...)"] + opciones_quitar, key=f"sel_rem_tr_{pq_id_sel}")
                         
-                            # Construir pool de sugerencias
-                            cands_sug_list = []
-                            f_ag_dt_sug = pd.to_datetime(agente_actual.get("Fecha", ""), dayfirst=True, errors="coerce")
-                            monto_limite_fac = tot_agente_actual + 0.05
-                            monto_limite_terc = (saldo_terceros_esperado_act if saldo_terceros_esperado_act > 0.05 else tot_agente_actual) + 0.05
-                        
-                            for _, tr_cand_s in cands_disp_agregar.iterrows():
-                                f_c_num = str(tr_cand_s["Factura"]).strip()
-                                if f_c_num in facs_en_este or f_c_num in facturas_bloqueadas_validadas or not f_c_num:
-                                    continue
-                                
-                                sc_cand_val = obtener_saldo_cruce_factura(tr_cand_s)
-                                if sc_cand_val <= 0.0:
-                                    continue
-                                
-                                # REGLA ESTRICTA: Que no superen el monto de la factura ni el monto de los ingresos para terceros
-                                if sc_cand_val > monto_limite_fac or sc_cand_val > monto_limite_terc or sc_cand_val > (dif_faltante_prev + 0.05):
-                                    continue
-                                
-                                prov_u = str(tr_cand_s.get("Proveedor", "")).upper()
-                                fec_str = str(tr_cand_s.get("Fecha", ""))
-                                fec_dt = pd.to_datetime(fec_str, dayfirst=True, errors="coerce")
-                                diff_dias = int((fec_dt - f_ag_dt_sug).days) if (pd.notna(fec_dt) and pd.notna(f_ag_dt_sug)) else 999
+                                if sel_para_quitar != "(Seleccionar...)":
+                                    fila_a_mover = mapa_quitar_row[sel_para_quitar]
+                                    fac_nom_mover = fila_a_mover["Factura"]
+                                    sc_mover = obtener_saldo_cruce_factura(fila_a_mover)
                             
-                                # REGLA CRONOLOGICA ESTRICTA: Solo facturas anteriores (-60d a 0d) o un poco despues (+1d a +15d)
-                                if pd.notna(fec_dt) and pd.notna(f_ag_dt_sug):
-                                    if diff_dias < -60 or diff_dias > 15:
-                                        continue
-                                elif diff_dias == 999:
-                                    continue
+                                    otros_pqs = [p for p in pqs_actuales.keys() if p != pq_id_sel and not st.session_state.get(f"paquete_listo_{p}", False)]
                             
-                                tags_sug = []
-                                score_sug = 0
+                                    # Calcular cual otro paquete tiene un faltante mas cercano a esta factura
+                                    mejor_pq_sug = None
+                                    mejor_diff_sug = float("inf")
+                                    for p_cand_id in otros_pqs:
+                                        p_cand = pqs_actuales[p_cand_id]
+                                        tot_ag_c = float(p_cand["agente"]["Total"])
+                                        tot_terc_c = sum([obtener_saldo_cruce_factura(r) for _, r in p_cand["terceros"].iterrows()])
+                                        faltante_c = tot_ag_c - tot_terc_c
+                                        diff_c = abs(faltante_c - sc_mover)
+                                        if diff_c < mejor_diff_sug:
+                                            mejor_diff_sug = diff_c
+                                            mejor_pq_sug = p_cand_id
+                                    
+                                    sug_txt = f" (Sugerencia: Paquete #{mejor_pq_sug})" if mejor_pq_sug else ""
+                                    opciones_destino = [
+                                        f"\U0001f3af Auto-Reubicar autom\u00e1ticamente donde mejor encaje{sug_txt}",
+                                        "\U0001f4e6 Mover a otro Paquete espec\u00edfico...",
+                                        "\U0001f6d2 Redirigir a Compras Directas Ordinarias (Pesta\u00f1a 1 y 4 - Se pag\u00f3 directo)",
+                                        "\u26aa Dejar libre en inventario (Sin asignar)"
+                                    ]
                             
-                                # Coincidencias especificas con los items de ingresos por terceros (solo si la factura del agente es BOG-70697 o de saldo similar)
-                                es_caso_70697 = "70697" in str(agente_actual.get("Factura", "")) or abs(saldo_terceros_esperado_act - 2542421.20) < 100.0
-                                if es_caso_70697 and abs(sc_cand_val - 1079157.20) < 50000:
-                                    tags_sug.append("\u2708\ufe0f Flete Internacional (~$1.08M)")
-                                    score_sug += 180 - (abs(sc_cand_val - 1079157.20) / 1000)
-                                elif es_caso_70697 and abs(sc_cand_val - 1463264.00) < 50000:
-                                    tags_sug.append("\U0001f3e2 Cargos en Origen (~$1.46M)")
-                                    score_sug += 180 - (abs(sc_cand_val - 1463264.00) / 1000)
-                                elif abs(sc_cand_val - dif_faltante_prev) < 5000:
-                                    tags_sug.append(f"\U0001f3af Cuadre Exacto (${dif_faltante_prev:,.2f})")
-                                    score_sug += 250
-                                elif sc_cand_val <= dif_faltante_prev + 0.05:
-                                    tags_sug.append(f"\U0001f9e9 Cubre {(sc_cand_val / dif_faltante_prev * 100):.1f}% del faltante")
-                                    score_sug += 60
-                                
-                                # Ponderacion por cercania de fecha dentro de la ventana (-60 a +15)
-                                if diff_dias == 0:
-                                    tags_sug.append("\U0001f7e2 Mismo d\u00eda (0d)")
-                                    score_sug += 100
-                                elif 0 < diff_dias <= 15:
-                                    tags_sug.append(f"\u27a1\ufe0f Poco despu\u00e9s (+{diff_dias}d)")
-                                    score_sug += 85 - (diff_dias * 3)
-                                elif -30 <= diff_dias < 0:
-                                    tags_sug.append(f"\u2b05\ufe0f Anterior ({abs(diff_dias)}d antes)")
-                                    score_sug += 90 - (abs(diff_dias) * 2)
-                                elif -60 <= diff_dias < -30:
-                                    tags_sug.append(f"\u2b05\ufe0f Anterior ({abs(diff_dias)}d antes)")
-                                    score_sug += 40 - abs(diff_dias)
-                                
-                                if any(k in prov_u for k in ["DHL", "CARGO", "ADUANA", "GARAJE", "ALMAVIVA", "ALMACENADORA", "UPS", "FEDEX", "FLETE", "TRANSPORTE", "PUERTO", "TERMINAL"]):
-                                    tags_sug.append("\U0001f6a2 Log\u00edstica/Aduana")
-                                    score_sug += 50
-                                
-                                cands_sug_list.append({
-                                    "Factura": f_c_num,
-                                    "Proveedor": tr_cand_s.get("Proveedor", "")[:32],
-                                    "Fecha": fec_str,
-                                    "Saldo": sc_cand_val,
-                                    "Dias": diff_dias,
-                                    "Tags": " \u2022 ".join(tags_sug) if tags_sug else "\u26aa Factura Libre",
-                                    "Score": score_sug,
-                                    "Row": tr_cand_s
-                                })
-                            
-                            cands_sug_list.sort(key=lambda x: x["Score"], reverse=True)
-                        
-                            # Detectar parejas de facturas que sumen al faltante
-                            pareja_match = None
-                            for i_p in range(min(15, len(cands_sug_list))):
-                                for j_p in range(i_p + 1, min(15, len(cands_sug_list))):
-                                    c1_p = cands_sug_list[i_p]
-                                    c2_p = cands_sug_list[j_p]
-                                    s_pair = round(c1_p["Saldo"] + c2_p["Saldo"], 2)
-                                    d_pair = abs(s_pair - dif_faltante_prev)
-                                    if d_pair < 50000:
-                                        pareja_match = (d_pair, s_pair, c1_p, c2_p)
-                                        break
-                                if pareja_match:
-                                    break
-                                
-                            if pareja_match:
-                                dp, sp, cp1, cp2 = pareja_match
-                                col_par1, col_par2 = st.columns([3.2, 1.2])
-                                with col_par1:
-                                    st.markdown(
-                                        f"<div style='background:#fefce8; border:1px solid #eab308; border-radius:6px; padding:8px 12px; margin-bottom:8px;'>"
-                                        f"\U0001f4a1 <b>Combinaci\u00f3n de 2 Facturas Sugerida:</b> <code>{cp1['Factura']}</code> ({cp1['Proveedor']}, ${cp1['Saldo']:,.2f}) + <code>{cp2['Factura']}</code> ({cp2['Proveedor']}, ${cp2['Saldo']:,.2f})<br>"
-                                        f"<span style='font-size:12px; color:#854d0e;'>Suma Combinada: <b>${sp:,.2f}</b> (Diferencia: <b>${dp:,.2f}</b>)</span></div>",
-                                        unsafe_allow_html=True
-                                    )
-                                with col_par2:
-                                    st.write("")
-                                    if st.button("\u2795 A\u00f1adir Ambas Facturas", key=f"btn_add_pair_{pq_id_sel}", type="primary", use_container_width=True):
-                                        terceros_nuevo = pd.concat([terceros_actual, pd.DataFrame([cp1["Row"], cp2["Row"]])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
-                                        st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_nuevo
-                                        st.session_state["paquete_seleccionado_id"] = pq_id_sel
-                                        st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                                        guardar_estado_manual(empresa)
-                                        st.success(f"\u00a1Facturas {cp1['Factura']} y {cp2['Factura']} a\u00f1adidas con \u00e9xito al Paquete #{pq_id_sel}!")
-                                        st.rerun()
-    
-                            if cands_sug_list:
-                                top_cands = cands_sug_list[:6]
-                                for idx_sug, sug_item in enumerate(top_cands):
-                                    c_sug1, c_sug2, c_sug3 = st.columns([1.5, 3.2, 1.1])
-                                    with c_sug1:
-                                        st.markdown(f"<b>{sug_item['Factura']}</b><br><span style='font-size:12px; color:#475569;'>{sug_item['Fecha']}</span>", unsafe_allow_html=True)
-                                    with c_sug2:
-                                        st.markdown(f"<b>{sug_item['Proveedor']}</b> \u2014 <b style='color:#0369a1;'>${sug_item['Saldo']:,.2f}</b><br><span style='font-size:12px; color:#15803d;'>{sug_item['Tags']}</span>", unsafe_allow_html=True)
-                                    with c_sug3:
+                                    c_dest1, c_dest2 = st.columns([2.6, 1.2])
+                                    with c_dest1:
+                                        dest_sel = st.radio(f"2. \u00bfA d\u00f3nde deseas redirigir la factura {fac_nom_mover}?:", opciones_destino, key=f"rad_dest_{pq_id_sel}_{fac_nom_mover}")
+                                        destino_pq_manual = None
+                                        if "Mover a otro Paquete espec\u00edfico" in dest_sel:
+                                            opciones_otros_pqs = [f"Paquete #{p}: {str(pqs_actuales[p]['agente'].get('Proveedor') or 'Agente')[:16]} (Fac {pqs_actuales[p]['agente']['Factura']})" for p in otros_pqs]
+                                            if opciones_otros_pqs:
+                                                sel_otro_pq_str = st.selectbox("Selecciona el paquete de destino:", opciones_otros_pqs, key=f"sel_otro_pq_{pq_id_sel}")
+                                                destino_pq_manual = int(sel_otro_pq_str.split(":")[0].replace("Paquete #", "").strip())
+                                            else:
+                                                st.info("No hay otros paquetes de forwarders disponibles en este archivo.")
+                                        
+                                    with c_dest2:
                                         st.write("")
-                                        if st.button("\u2795 A\u00f1adir", key=f"btn_sug_add_{pq_id_sel}_{idx_sug}", use_container_width=True):
-                                            terceros_nuevo = pd.concat([terceros_actual, pd.DataFrame([sug_item["Row"]])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
+                                        st.write("")
+                                        if st.button("\U0001f680 Sacar y Redirigir Factura", key=f"btn_ejecutar_reubicar_{pq_id_sel}", help="Retira la factura de este paquete y la redirige al destino seleccionado."):
+                                            # 1. Retirar del paquete actual
+                                            terceros_remanente = terceros_actual[terceros_actual["Factura"] != fac_nom_mover].copy()
+                                            st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_remanente
+                                    
+                                            # 2. Redirigir al destino
+                                            if "Auto-Reubicar" in dest_sel and mejor_pq_sug is not None:
+                                                dest_pq = st.session_state["paquetes_importacion"][mejor_pq_sug]["terceros"]
+                                                dest_nuevo = pd.concat([dest_pq, pd.DataFrame([fila_a_mover])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
+                                                st.session_state["paquetes_importacion"][mejor_pq_sug]["terceros"] = dest_nuevo
+                                                st.success(f"\u00a1Factura {fac_nom_mover} retirada del Paquete #{pq_id_sel} y auto-reubicada en el Paquete #{mejor_pq_sug}!")
+                                            elif "Mover a otro Paquete" in dest_sel and destino_pq_manual is not None:
+                                                dest_pq = st.session_state["paquetes_importacion"][destino_pq_manual]["terceros"]
+                                                dest_nuevo = pd.concat([dest_pq, pd.DataFrame([fila_a_mover])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
+                                                st.session_state["paquetes_importacion"][destino_pq_manual]["terceros"] = dest_nuevo
+                                                st.success(f"\u00a1Factura {fac_nom_mover} movida con \u00e9xito al Paquete #{destino_pq_manual}!")
+                                            elif "Compras Directas Ordinarias" in dest_sel:
+                                                if "df_procesado" in st.session_state:
+                                                    df_glob = st.session_state["df_procesado"]
+                                                    m_idx = df_glob[df_glob["Factura"] == fac_nom_mover].index
+                                                    if not m_idx.empty:
+                                                        df_glob.at[m_idx[0], "Es Aduanera"] = False
+                                                        df_glob.at[m_idx[0], "Grupo Importaci\u00f3n"] = ""
+                                                        df_glob.at[m_idx[0], "Estado Registro"] = "\u26aa Compra Directa Ordinaria"
+                                                        df_glob.at[m_idx[0], "Cta Contrapartida"] = "22050501"
+                                                        st.session_state["df_procesado"] = df_glob
+                                                st.success(f"\u00a1Factura {fac_nom_mover} retirada de importaciones y enviada a Compras Directas Ordinarias (Pesta\u00f1a 1 y 4)!")
+                                            else:
+                                                st.success(f"\u00a1Factura {fac_nom_mover} retirada del Paquete #{pq_id_sel} y devuelta a facturas libres!")
+                                    
+                                            st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                                            st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                                            guardar_estado_manual(empresa)
+                                            st.rerun()
+                            else:
+                                st.info("Este paquete no tiene facturas asignadas para retirar.")
+                        
+                            st.markdown("---")
+                    
+                            # 2. SECCION PARA AGREGAR NUEVAS FACTURAS
+                            cands_disp_agregar = df_terceros_all.copy()
+                            f_ag_dt_sug = pd.to_datetime(agente_actual.get("Fecha", ""), dayfirst=True, errors="coerce")
+                    
+                            # RESTRICCION DE BLOQUEO: Las facturas de paquetes ya validados no se pueden anadir a otros
+                            facturas_bloqueadas_validadas = set()
+                            if "paquetes_importacion" in st.session_state:
+                                for p_k_v, p_dat_v in st.session_state["paquetes_importacion"].items():
+                                    if st.session_state.get(f"paquete_listo_{p_k_v}", False):
+                                        df_t_val = p_dat_v.get("terceros")
+                                        if df_t_val is not None and not df_t_val.empty:
+                                            for f_asig in df_t_val["Factura"].dropna():
+                                                facturas_bloqueadas_validadas.add(str(f_asig).strip())
+    
+                            # 2.1 SUGERENCIAS INTELIGENTES DE FACTURAS PARA INGRESOS DE TERCEROS
+                            if dif_faltante_prev > 0.05:
+                                st.markdown(
+                                    f"""
+                                    <div style="background:#f0fdf4; border:1.5px solid #22c55e; border-radius:8px; padding:12px 16px; margin:10px 0 16px 0;">
+                                        <h5 style="margin:0 0 4px 0; color:#15803d;">\U0001f50e Facturas Sugeridas para Ingresos de Terceros (Faltante Pendiente: ${dif_faltante_prev:,.2f}):</h5>
+                                        <p style="margin:0 0 8px 0; font-size:13px; color:#166534;">
+                                            Facturas libres en el sistema que <b>no superan el monto de la factura (${tot_agente_actual:,.2f})</b> ni el <b>monto de terceros (${saldo_terceros_esperado_act if saldo_terceros_esperado_act > 0.05 else tot_agente_actual:,.2f})</b>, analizadas por concordancia de fletes, cargos, fecha y proveedor:
+                                        </p>
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True
+                                )
+                        
+                                # Construir pool de sugerencias
+                                cands_sug_list = []
+                                f_ag_dt_sug = pd.to_datetime(agente_actual.get("Fecha", ""), dayfirst=True, errors="coerce")
+                                monto_limite_fac = tot_agente_actual + 0.05
+                                monto_limite_terc = (saldo_terceros_esperado_act if saldo_terceros_esperado_act > 0.05 else tot_agente_actual) + 0.05
+                        
+                                for _, tr_cand_s in cands_disp_agregar.iterrows():
+                                    f_c_num = str(tr_cand_s["Factura"]).strip()
+                                    if f_c_num in facs_en_este or f_c_num in facturas_bloqueadas_validadas or not f_c_num:
+                                        continue
+                                
+                                    sc_cand_val = obtener_saldo_cruce_factura(tr_cand_s)
+                                    if sc_cand_val <= 0.0:
+                                        continue
+                                
+                                    # REGLA ESTRICTA: Que no superen el monto de la factura ni el monto de los ingresos para terceros
+                                    if sc_cand_val > monto_limite_fac or sc_cand_val > monto_limite_terc or sc_cand_val > (dif_faltante_prev + 0.05):
+                                        continue
+                                
+                                    prov_u = str(tr_cand_s.get("Proveedor", "")).upper()
+                                    fec_str = str(tr_cand_s.get("Fecha", ""))
+                                    fec_dt = pd.to_datetime(fec_str, dayfirst=True, errors="coerce")
+                                    diff_dias = int((fec_dt - f_ag_dt_sug).days) if (pd.notna(fec_dt) and pd.notna(f_ag_dt_sug)) else 999
+                            
+                                    # REGLA CRONOLOGICA ESTRICTA: Solo facturas anteriores (-60d a 0d) o un poco despues (+1d a +15d)
+                                    if pd.notna(fec_dt) and pd.notna(f_ag_dt_sug):
+                                        if diff_dias < -60 or diff_dias > 15:
+                                            continue
+                                    elif diff_dias == 999:
+                                        continue
+                            
+                                    tags_sug = []
+                                    score_sug = 0
+                            
+                                    # Coincidencias especificas con los items de ingresos por terceros (solo si la factura del agente es BOG-70697 o de saldo similar)
+                                    es_caso_70697 = "70697" in str(agente_actual.get("Factura", "")) or abs(saldo_terceros_esperado_act - 2542421.20) < 100.0
+                                    if es_caso_70697 and abs(sc_cand_val - 1079157.20) < 50000:
+                                        tags_sug.append("\u2708\ufe0f Flete Internacional (~$1.08M)")
+                                        score_sug += 180 - (abs(sc_cand_val - 1079157.20) / 1000)
+                                    elif es_caso_70697 and abs(sc_cand_val - 1463264.00) < 50000:
+                                        tags_sug.append("\U0001f3e2 Cargos en Origen (~$1.46M)")
+                                        score_sug += 180 - (abs(sc_cand_val - 1463264.00) / 1000)
+                                    elif abs(sc_cand_val - dif_faltante_prev) < 5000:
+                                        tags_sug.append(f"\U0001f3af Cuadre Exacto (${dif_faltante_prev:,.2f})")
+                                        score_sug += 250
+                                    elif sc_cand_val <= dif_faltante_prev + 0.05:
+                                        tags_sug.append(f"\U0001f9e9 Cubre {(sc_cand_val / dif_faltante_prev * 100):.1f}% del faltante")
+                                        score_sug += 60
+                                
+                                    # Ponderacion por cercania de fecha dentro de la ventana (-60 a +15)
+                                    if diff_dias == 0:
+                                        tags_sug.append("\U0001f7e2 Mismo d\u00eda (0d)")
+                                        score_sug += 100
+                                    elif 0 < diff_dias <= 15:
+                                        tags_sug.append(f"\u27a1\ufe0f Poco despu\u00e9s (+{diff_dias}d)")
+                                        score_sug += 85 - (diff_dias * 3)
+                                    elif -30 <= diff_dias < 0:
+                                        tags_sug.append(f"\u2b05\ufe0f Anterior ({abs(diff_dias)}d antes)")
+                                        score_sug += 90 - (abs(diff_dias) * 2)
+                                    elif -60 <= diff_dias < -30:
+                                        tags_sug.append(f"\u2b05\ufe0f Anterior ({abs(diff_dias)}d antes)")
+                                        score_sug += 40 - abs(diff_dias)
+                                
+                                    if any(k in prov_u for k in ["DHL", "CARGO", "ADUANA", "GARAJE", "ALMAVIVA", "ALMACENADORA", "UPS", "FEDEX", "FLETE", "TRANSPORTE", "PUERTO", "TERMINAL"]):
+                                        tags_sug.append("\U0001f6a2 Log\u00edstica/Aduana")
+                                        score_sug += 50
+                                
+                                    cands_sug_list.append({
+                                        "Factura": f_c_num,
+                                        "Proveedor": tr_cand_s.get("Proveedor", "")[:32],
+                                        "Fecha": fec_str,
+                                        "Saldo": sc_cand_val,
+                                        "Dias": diff_dias,
+                                        "Tags": " \u2022 ".join(tags_sug) if tags_sug else "\u26aa Factura Libre",
+                                        "Score": score_sug,
+                                        "Row": tr_cand_s
+                                    })
+                            
+                                cands_sug_list.sort(key=lambda x: x["Score"], reverse=True)
+                        
+                                # Detectar parejas de facturas que sumen al faltante
+                                pareja_match = None
+                                for i_p in range(min(15, len(cands_sug_list))):
+                                    for j_p in range(i_p + 1, min(15, len(cands_sug_list))):
+                                        c1_p = cands_sug_list[i_p]
+                                        c2_p = cands_sug_list[j_p]
+                                        s_pair = round(c1_p["Saldo"] + c2_p["Saldo"], 2)
+                                        d_pair = abs(s_pair - dif_faltante_prev)
+                                        if d_pair < 50000:
+                                            pareja_match = (d_pair, s_pair, c1_p, c2_p)
+                                            break
+                                    if pareja_match:
+                                        break
+                                
+                                if pareja_match:
+                                    dp, sp, cp1, cp2 = pareja_match
+                                    col_par1, col_par2 = st.columns([3.2, 1.2])
+                                    with col_par1:
+                                        st.markdown(
+                                            f"<div style='background:#fefce8; border:1px solid #eab308; border-radius:6px; padding:8px 12px; margin-bottom:8px;'>"
+                                            f"\U0001f4a1 <b>Combinaci\u00f3n de 2 Facturas Sugerida:</b> <code>{cp1['Factura']}</code> ({cp1['Proveedor']}, ${cp1['Saldo']:,.2f}) + <code>{cp2['Factura']}</code> ({cp2['Proveedor']}, ${cp2['Saldo']:,.2f})<br>"
+                                            f"<span style='font-size:12px; color:#854d0e;'>Suma Combinada: <b>${sp:,.2f}</b> (Diferencia: <b>${dp:,.2f}</b>)</span></div>",
+                                            unsafe_allow_html=True
+                                        )
+                                    with col_par2:
+                                        st.write("")
+                                        if st.button("\u2795 A\u00f1adir Ambas Facturas", key=f"btn_add_pair_{pq_id_sel}", type="primary", use_container_width=True):
+                                            terceros_nuevo = pd.concat([terceros_actual, pd.DataFrame([cp1["Row"], cp2["Row"]])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
                                             st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_nuevo
                                             st.session_state["paquete_seleccionado_id"] = pq_id_sel
                                             st.session_state["sel_paquete_activo_key"] = pq_id_sel
                                             guardar_estado_manual(empresa)
-                                            st.success(f"\u00a1Factura {sug_item['Factura']} a\u00f1adida al Paquete #{pq_id_sel}!")
+                                            st.success(f"\u00a1Facturas {cp1['Factura']} y {cp2['Factura']} a\u00f1adidas con \u00e9xito al Paquete #{pq_id_sel}!")
                                             st.rerun()
-                            else:
-                                st.info(f"No se encontraron facturas sugeridas que no superen el monto de terceros (${monto_limite_terc:,.2f}) ni est\u00e9n bloqueadas.")
-                            st.markdown("---")
     
-                        st.markdown("##### \u2795 A\u00f1adir Manualmente otra Factura Libre a este paquete:")
-                        filtro_cercanas_man = st.checkbox(
-                            "\U0001f4c5 Filtrar solo facturas de la ventana cronol\u00f3gica (-60d anteriores a +15d posteriores)",
-                            value=True,
-                            key=f"chk_fec_man_{pq_id_sel}",
-                            help="Oculta facturas lejanas de otros meses y muestra solo facturas anteriores o un poco despu\u00e9s de la operaci\u00f3n."
-                        )
+                                if cands_sug_list:
+                                    top_cands = cands_sug_list[:6]
+                                    for idx_sug, sug_item in enumerate(top_cands):
+                                        c_sug1, c_sug2, c_sug3 = st.columns([1.5, 3.2, 1.1])
+                                        with c_sug1:
+                                            st.markdown(f"<b>{sug_item['Factura']}</b><br><span style='font-size:12px; color:#475569;'>{sug_item['Fecha']}</span>", unsafe_allow_html=True)
+                                        with c_sug2:
+                                            st.markdown(f"<b>{sug_item['Proveedor']}</b> \u2014 <b style='color:#0369a1;'>${sug_item['Saldo']:,.2f}</b><br><span style='font-size:12px; color:#15803d;'>{sug_item['Tags']}</span>", unsafe_allow_html=True)
+                                        with c_sug3:
+                                            st.write("")
+                                            if st.button("\u2795 A\u00f1adir", key=f"btn_sug_add_{pq_id_sel}_{idx_sug}", use_container_width=True):
+                                                terceros_nuevo = pd.concat([terceros_actual, pd.DataFrame([sug_item["Row"]])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
+                                                st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_nuevo
+                                                st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                                                st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                                                guardar_estado_manual(empresa)
+                                                st.success(f"\u00a1Factura {sug_item['Factura']} a\u00f1adida al Paquete #{pq_id_sel}!")
+                                                st.rerun()
+                                else:
+                                    st.info(f"No se encontraron facturas sugeridas que no superen el monto de terceros (${monto_limite_terc:,.2f}) ni est\u00e9n bloqueadas.")
+                                st.markdown("---")
     
-                        opciones_cands = []
-                        mapa_agregar = {}
+                            st.markdown("##### \u2795 A\u00f1adir Manualmente otra Factura Libre a este paquete:")
+                            filtro_cercanas_man = st.checkbox(
+                                "\U0001f4c5 Filtrar solo facturas de la ventana cronol\u00f3gica (-60d anteriores a +15d posteriores)",
+                                value=True,
+                                key=f"chk_fec_man_{pq_id_sel}",
+                                help="Oculta facturas lejanas de otros meses y muestra solo facturas anteriores o un poco despu\u00e9s de la operaci\u00f3n."
+                            )
     
-                        for _, tr_cand in cands_disp_agregar.iterrows():
-                            f_cand_num = str(tr_cand["Factura"]).strip()
-                            if f_cand_num not in facs_en_este and f_cand_num not in facturas_bloqueadas_validadas:
-                                fec_c_str = str(tr_cand.get("Fecha", ""))
-                                fec_c_dt = pd.to_datetime(fec_c_str, dayfirst=True, errors="coerce")
-                                diff_m = int((fec_c_dt - f_ag_dt_sug).days) if (pd.notna(fec_c_dt) and pd.notna(f_ag_dt_sug)) else 999
+                            opciones_cands = []
+                            mapa_agregar = {}
+    
+                            for _, tr_cand in cands_disp_agregar.iterrows():
+                                f_cand_num = str(tr_cand["Factura"]).strip()
+                                if f_cand_num not in facs_en_este and f_cand_num not in facturas_bloqueadas_validadas:
+                                    fec_c_str = str(tr_cand.get("Fecha", ""))
+                                    fec_c_dt = pd.to_datetime(fec_c_str, dayfirst=True, errors="coerce")
+                                    diff_m = int((fec_c_dt - f_ag_dt_sug).days) if (pd.notna(fec_c_dt) and pd.notna(f_ag_dt_sug)) else 999
                             
-                                if filtro_cercanas_man and (diff_m < -60 or diff_m > 15):
-                                    continue
+                                    if filtro_cercanas_man and (diff_m < -60 or diff_m > 15):
+                                        continue
                                 
-                                es_reg_c = bool(tr_cand.get("Ya Registrada", False))
-                                tag_est = f"\U0001f534 Registrada ({tr_cand.get('Comprobante Previo', '10-Prev')})" if es_reg_c else "\u26aa No Contabilizada (Pendiente)"
-                                sc_cand = obtener_saldo_cruce_factura(tr_cand)
-                                d_tag = f"({diff_m:+d}d)" if diff_m != 999 else "(sin fecha)"
-                                tag_c = f"[{tag_est}] [{f_cand_num}] {d_tag} {str(tr_cand.get('Proveedor') or 'Tercero')[:20]} (Saldo: ${sc_cand:,.2f})"
-                                opciones_cands.append((abs(diff_m), tag_c, tr_cand))
+                                    es_reg_c = bool(tr_cand.get("Ya Registrada", False))
+                                    tag_est = f"\U0001f534 Registrada ({tr_cand.get('Comprobante Previo', '10-Prev')})" if es_reg_c else "\u26aa No Contabilizada (Pendiente)"
+                                    sc_cand = obtener_saldo_cruce_factura(tr_cand)
+                                    d_tag = f"({diff_m:+d}d)" if diff_m != 999 else "(sin fecha)"
+                                    tag_c = f"[{tag_est}] [{f_cand_num}] {d_tag} {str(tr_cand.get('Proveedor') or 'Tercero')[:20]} (Saldo: ${sc_cand:,.2f})"
+                                    opciones_cands.append((abs(diff_m), tag_c, tr_cand))
     
-                        opciones_cands.sort(key=lambda x: x[0])
-                        opciones_agregar = [x[1] for x in opciones_cands]
-                        for _, tag_c, tr_cand in opciones_cands:
-                            mapa_agregar[tag_c] = tr_cand
+                            opciones_cands.sort(key=lambda x: x[0])
+                            opciones_agregar = [x[1] for x in opciones_cands]
+                            for _, tag_c, tr_cand in opciones_cands:
+                                mapa_agregar[tag_c] = tr_cand
                             
-                        c_add1, c_add2 = st.columns([3, 1.2])
-                        with c_add1:
-                            sel_para_agregar = st.selectbox("Selecciona factura libre para a\u00f1adir a este paquete:", ["(Seleccionar...)"] + opciones_agregar, key=f"sel_add_tr_{pq_id_sel}")
-                        with c_add2:
-                            st.write("")
-                            st.write("")
-                            if st.button("\u2795 A\u00f1adir al Paquete", key=f"btn_add_tr_{pq_id_sel}") and sel_para_agregar != "(Seleccionar...)":
-                                fila_agregada = mapa_agregar[sel_para_agregar]
-                                terceros_nuevo = pd.concat([terceros_actual, pd.DataFrame([fila_agregada])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
-                                st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_nuevo
-                                st.session_state["paquete_seleccionado_id"] = pq_id_sel
-                                st.session_state["sel_paquete_activo_key"] = pq_id_sel
-                                guardar_estado_manual(empresa)
-                                st.success(f"\u00a1Factura {fila_agregada['Factura']} a\u00f1adida al Paquete #{pq_id_sel}!")
-                                st.rerun()
+                            c_add1, c_add2 = st.columns([3, 1.2])
+                            with c_add1:
+                                sel_para_agregar = st.selectbox("Selecciona factura libre para a\u00f1adir a este paquete:", ["(Seleccionar...)"] + opciones_agregar, key=f"sel_add_tr_{pq_id_sel}")
+                            with c_add2:
+                                st.write("")
+                                st.write("")
+                                if st.button("\u2795 A\u00f1adir al Paquete", key=f"btn_add_tr_{pq_id_sel}") and sel_para_agregar != "(Seleccionar...)":
+                                    fila_agregada = mapa_agregar[sel_para_agregar]
+                                    terceros_nuevo = pd.concat([terceros_actual, pd.DataFrame([fila_agregada])]).drop_duplicates(subset=["Factura"]).reset_index(drop=True)
+                                    st.session_state["paquetes_importacion"][pq_id_sel]["terceros"] = terceros_nuevo
+                                    st.session_state["paquete_seleccionado_id"] = pq_id_sel
+                                    st.session_state["sel_paquete_activo_key"] = pq_id_sel
+                                    guardar_estado_manual(empresa)
+                                    st.success(f"\u00a1Factura {fila_agregada['Factura']} a\u00f1adida al Paquete #{pq_id_sel}!")
+                                    st.rerun()
     
                     # 3. TRATAMIENTO CONTABLE: PAGINA 2 / MERCANCIAS EN TRANSITO / NO DEDUCIBLES
                     enviar_h2_activo = bool(st.session_state.get(f"enviar_h2_pq_{pq_id_sel}", False))
@@ -5808,7 +5818,7 @@ try:
                     st.markdown("#### \U0001f4e5 Exportar Control de Paquetes y Cruces de Importaci\u00f3n:")
                     st.caption("Descarga un archivo Excel con el resumen de cada paquete, el detalle de facturas de terceros vinculadas y el asiento contable de control (sin generar a\u00fan notas de contabilidad en Siigo hasta que definas el procedimiento):")
     
-                    if st.checkbox("\U0001f4ca Generar Archivo Excel de Control de Cruces para Descarga (Bajo demanda para proteger memoria RAM)", value=False, key="chk_gen_excel_cruces_tab3"):
+                    if st.checkbox("\U0001f4ca Mostrar Bot\u00f3n de Descarga de Control de Cruces en Excel", value=True, key="chk_gen_excel_cruces_tab3"):
                         # Generar Excel estructurado por Paquetes de Importacion individuales
                         todos_asientos_lista = []
                         resumen_paquetes_lista = []
@@ -6006,7 +6016,10 @@ try:
                 with c_pqs_inc2:
                     st.caption(f"Suben a Siigo: **{len(pqs_listos_siigo)}** | Solo Conciliaci\u00f3n: **{len(pqs_solo_concil)}** | Totales: **{len(pqs_actuales_siigo)}**")
     
-                generar_siigo_ahora = st.checkbox("\u26a1 Generar Planillas Oficiales de Siigo Nube y Libro Auxiliar (Activa aqu\u00ed cuando vayas a descargar)", value=False, key="chk_gen_siigo_ondemand_tab4", help="Genera los libros Excel formulados \u00fanicamente cuando vas a descargarlos, evitando consumir memoria RAM mientras trabajas en las pesta\u00f1as 1, 2 y 3.")
+                cols_vista_siigo = [c for c in ["Comprobante Siigo", "Fecha", "Factura", "Proveedor", "NIT Emisor", "Operacion", "Cta Principal", "Base", "IVA", "ReteFuente", "ReteICA", "Total", "Cta Contrapartida"] if c in df_p.columns]
+                st.markdown("#### \U0001f4cb Vista Previa de Facturas y Comprobantes a Exportar en Planilla Siigo:")
+                st.dataframe(df_p[cols_vista_siigo], use_container_width=True)
+                generar_siigo_ahora = True
                 if generar_siigo_ahora:
                     wb = openpyxl.Workbook()
     
