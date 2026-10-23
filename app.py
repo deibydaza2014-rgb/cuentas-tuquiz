@@ -11,12 +11,16 @@ try:
 except Exception:
     pass
 try:
-    _orig_sd_init = pd.StringDtype.__init__
-    def _compat_sd_init(self, *args, **kwargs):
-        if len(args) >= 1:
-            return _orig_sd_init(self, args[0])
-        return _orig_sd_init(self, **kwargs)
-    pd.StringDtype.__init__ = _compat_sd_init
+    def _safe_sd_init(self, storage=None, *args, **kwargs):
+        if storage is None or storage not in ("python", "pyarrow", "pyarrow_numpy"):
+            storage = "python"
+        self.storage = storage
+        try:
+            if not hasattr(self, "_na_value"):
+                self._na_value = pd.NA
+        except Exception:
+            pass
+    pd.StringDtype.__init__ = _safe_sd_init
 except Exception:
     pass
 
@@ -66,2703 +70,704 @@ except Exception:
 
 st.set_page_config(page_title="Cuentas Tuquiz - ERP y Auditoria Contable", layout="wide", page_icon="\U0001f3e2")
 
-# Estilos visuales profesionales y proteccion contra conflictos de Google Translate
-st.markdown("""
-<meta name="google" content="notranslate">
-<style class="notranslate">
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
-        -webkit-translate: no !important;
-        translate: no !important;
-    }
-    .main { background-color: #f8fafc; }
-    .stButton>button { background-color: #0070ba; color: white; border-radius: 6px; font-weight: 600; }
-    .card-box { background: white; padding: 22px; border-radius: 10px; border: 1px solid #e2e8f0; box-shadow: 0 2px 5px rgba(0,0,0,0.04); margin-bottom: 18px; }
-    .audit-card { background: #ffffff; padding: 22px; border-left: 5px solid #0070ba; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
-    .badge-active { background-color: #dcfce7; color: #15803d; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
-    .badge-next { background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
-    .tag-propio { background-color: #dcfce7; color: #15803d; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
-    .tag-comp { background-color: #eff6ff; color: #1d4ed8; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-family: monospace; }
-    .badge-tax { background-color: #e0f2fe; color: #0369a1; padding: 3px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-right: 4px; }
-</style>
-""", unsafe_allow_html=True)
+try:
+
+    # Estilos visuales profesionales y proteccion contra conflictos de Google Translate
+    st.markdown("""
+    <meta name="google" content="notranslate">
+    <style class="notranslate">
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+            -webkit-translate: no !important;
+            translate: no !important;
+        }
+        .main { background-color: #f8fafc; }
+        .stButton>button { background-color: #0070ba; color: white; border-radius: 6px; font-weight: 600; }
+        .card-box { background: white; padding: 22px; border-radius: 10px; border: 1px solid #e2e8f0; box-shadow: 0 2px 5px rgba(0,0,0,0.04); margin-bottom: 18px; }
+        .audit-card { background: #ffffff; padding: 22px; border-left: 5px solid #0070ba; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+        .badge-active { background-color: #dcfce7; color: #15803d; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .badge-next { background-color: #f1f5f9; color: #64748b; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .tag-propio { background-color: #dcfce7; color: #15803d; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+        .tag-comp { background-color: #eff6ff; color: #1d4ed8; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-family: monospace; }
+        .badge-tax { background-color: #e0f2fe; color: #0369a1; padding: 3px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-right: 4px; }
+    </style>
+    """, unsafe_allow_html=True)
 
 
 
-# ==============================================================================
-# CONFIGURACION DE DIRECTORIOS Y SISTEMA DE AUTO-GUARDADO CONTINUO
-# ==============================================================================
-# ==============================================================================
-# CONFIGURACION DE DIRECTORIOS Y SISTEMA DE AUTO-GUARDADO CONTINUO
-# ==============================================================================
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "almacenamiento_contable")
-os.makedirs(DATA_DIR, exist_ok=True)
+    # ==============================================================================
+    # CONFIGURACION DE DIRECTORIOS Y SISTEMA DE AUTO-GUARDADO CONTINUO
+    # ==============================================================================
+    # ==============================================================================
+    # CONFIGURACION DE DIRECTORIOS Y SISTEMA DE AUTO-GUARDADO CONTINUO
+    # ==============================================================================
+    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "almacenamiento_contable")
+    os.makedirs(DATA_DIR, exist_ok=True)
 
-import tempfile
-import hashlib
+    import tempfile
+    import hashlib
 
-PDF_DISK_CACHE_ROOT = os.path.join(DATA_DIR, "_pdf_disk_cache")
-os.makedirs(PDF_DISK_CACHE_ROOT, exist_ok=True)
-ZIP_FACTURAS_DISK_PATH = os.path.join(PDF_DISK_CACHE_ROOT, "paquete_facturas_actual.zip")
+    PDF_DISK_CACHE_ROOT = os.path.join(tempfile.gettempdir(), "indumaq_pdf_disk_cache")
+    os.makedirs(PDF_DISK_CACHE_ROOT, exist_ok=True)
+    ZIP_FACTURAS_DISK_PATH = os.path.join(PDF_DISK_CACHE_ROOT, "paquete_facturas_actual.zip")
 
 
-class DiskBackedPDFDict(dict):
-    """
-    Diccionario de PDFs respaldado en disco f\u00edsico (/tmp) que consume ~0 MB de memoria RAM.
-    Guarda cada PDF en disco al asignarlo y lo lee bajo demanda solo cuando se consulta individualmente.
-    """
-    def __init__(self, subdir="default", initial_data=None):
-        super().__init__()
-        self.subdir = re.sub(r'[^a-zA-Z0-9_-]', '_', str(subdir))
-        self.store_dir = os.path.join(PDF_DISK_CACHE_ROOT, self.subdir)
-        os.makedirs(self.store_dir, exist_ok=True)
-        try:
-            for fn in os.listdir(self.store_dir):
-                if fn.lower().endswith(".pdf"):
-                    super().__setitem__(fn, os.path.join(self.store_dir, fn))
-        except Exception:
-            pass
-        if initial_data and isinstance(initial_data, dict):
-            for k, v in initial_data.items():
-                self[k] = v
-
-    def _safe_path(self, key):
-        safe_name = os.path.basename(str(key)).replace("/", "_").replace("\\", "_")
-        if not safe_name:
-            safe_name = "doc.pdf"
-        return os.path.join(self.store_dir, safe_name)
-
-    def __setitem__(self, key, value):
-        p = self._safe_path(key)
-        if isinstance(value, (bytes, bytearray)):
+    class DiskBackedPDFDict(dict):
+        _is_disk_backed_pdf_dict = True
+        """
+        Diccionario de PDFs respaldado en disco f\u00edsico (/tmp) que consume ~0 MB de memoria RAM.
+        Guarda cada PDF en disco al asignarlo y lo lee bajo demanda solo cuando se consulta individualmente.
+        """
+        def __init__(self, subdir="default", initial_data=None):
+            super().__init__()
+            self.subdir = re.sub(r'[^a-zA-Z0-9_-]', '_', str(subdir))
+            self.store_dir = os.path.join(PDF_DISK_CACHE_ROOT, self.subdir)
+            os.makedirs(self.store_dir, exist_ok=True)
             try:
-                with open(p, "wb") as f:
-                    f.write(value)
-                super().__setitem__(key, p)
+                for fn in os.listdir(self.store_dir):
+                    if fn.lower().endswith(".pdf"):
+                        super().__setitem__(fn, os.path.join(self.store_dir, fn))
             except Exception:
                 pass
-        elif isinstance(value, str) and os.path.exists(value):
-            super().__setitem__(key, value)
+            if initial_data and isinstance(initial_data, dict):
+                for k, v in initial_data.items():
+                    self[k] = v
 
-    def __getitem__(self, key):
-        p = super().__getitem__(key)
-        if isinstance(p, (bytes, bytearray)):
-            return p
-        if isinstance(p, str) and os.path.exists(p):
-            try:
-                with open(p, "rb") as f:
-                    return f.read()
-            except Exception:
-                return b""
-        return b""
+        def _safe_path(self, key):
+            safe_name = os.path.basename(str(key)).replace("/", "_").replace("\\", "_")
+            if not safe_name:
+                safe_name = "doc.pdf"
+            return os.path.join(self.store_dir, safe_name)
 
-    def get_path(self, key):
-        if key in self:
+        def __setitem__(self, key, value):
+            p = self._safe_path(key)
+            if isinstance(value, (bytes, bytearray)):
+                try:
+                    with open(p, "wb") as f:
+                        f.write(value)
+                    super().__setitem__(key, p)
+                except Exception:
+                    pass
+            elif isinstance(value, str) and os.path.exists(value):
+                super().__setitem__(key, value)
+
+        def __getitem__(self, key):
             p = super().__getitem__(key)
-            if isinstance(p, str) and os.path.exists(p):
+            if isinstance(p, (bytes, bytearray)):
                 return p
-        return None
+            if isinstance(p, str) and os.path.exists(p):
+                try:
+                    with open(p, "rb") as f:
+                        return f.read()
+                except Exception:
+                    return b""
+            return b""
 
-    def get(self, key, default=None):
-        if key in self:
-            val = self[key]
-            return val if val else default
-        return default
+        def get_path(self, key):
+            if key in self:
+                p = super().__getitem__(key)
+                if isinstance(p, str) and os.path.exists(p):
+                    return p
+            return None
 
-    def values(self):
-        for k in list(self.keys()):
-            yield self[k]
+        def get(self, key, default=None):
+            if key in self:
+                val = self[key]
+                return val if val else default
+            return default
 
-    def items(self):
-        for k in list(self.keys()):
-            yield (k, self[k])
+        def values(self):
+            for k in list(self.keys()):
+                yield self[k]
 
-    def clear_disk(self):
-        super().clear()
-        try:
-            if os.path.exists(self.store_dir):
-                shutil.rmtree(self.store_dir, ignore_errors=True)
-                os.makedirs(self.store_dir, exist_ok=True)
-        except Exception:
-            pass
+        def items(self):
+            for k in list(self.keys()):
+                yield (k, self[k])
+
+        def clear_disk(self):
+            super().clear()
+            try:
+                if os.path.exists(self.store_dir):
+                    shutil.rmtree(self.store_dir, ignore_errors=True)
+                    os.makedirs(self.store_dir, exist_ok=True)
+            except Exception:
+                pass
 
 
-def asegurar_dicts_pdf_en_disco():
-    """Convierte cualquier diccionario de PDFs en memoria a DiskBackedPDFDict para liberar RAM de inmediato."""
-    for k_name, sub_name in [("raw_uploaded_pdfs", "raw_pdfs"), ("dict_pdfs", "renom_pdfs")]:
-        if k_name not in st.session_state or st.session_state[k_name] is None:
-            st.session_state[k_name] = DiskBackedPDFDict(sub_name)
-        elif not isinstance(st.session_state[k_name], DiskBackedPDFDict):
-            old_d = st.session_state[k_name]
-            new_d = DiskBackedPDFDict(sub_name)
-            if isinstance(old_d, dict):
-                for fn, bval in old_d.items():
+    def asegurar_dicts_pdf_en_disco():
+        """Convierte cualquier diccionario de PDFs en memoria a DiskBackedPDFDict para liberar RAM de inmediato."""
+        for k_name, sub_name in [("raw_uploaded_pdfs", "raw_pdfs"), ("dict_pdfs", "renom_pdfs")]:
+            cur_obj = st.session_state.get(k_name)
+            if cur_obj is None:
+                st.session_state[k_name] = DiskBackedPDFDict(sub_name)
+            elif getattr(cur_obj, "_is_disk_backed_pdf_dict", False) or type(cur_obj).__name__ == "DiskBackedPDFDict":
+                continue
+            elif isinstance(cur_obj, dict):
+                new_d = DiskBackedPDFDict(sub_name)
+                for fn in list(cur_obj.keys()):
+                    bval = dict.__getitem__(cur_obj, fn)
                     new_d[fn] = bval
-            st.session_state[k_name] = new_d
-    # Si zip_pdfs estaba en RAM como bytes, moverlo a disco y liberar RAM
-    if isinstance(st.session_state.get("zip_pdfs"), (bytes, bytearray)):
-        try:
-            with open(ZIP_FACTURAS_DISK_PATH, "wb") as fz:
-                fz.write(st.session_state["zip_pdfs"])
-            st.session_state["zip_pdfs_path"] = ZIP_FACTURAS_DISK_PATH
-        except Exception:
-            pass
-        st.session_state["zip_pdfs"] = None
+                st.session_state[k_name] = new_d
+        # Si zip_pdfs estaba en RAM como bytes, moverlo a disco y liberar RAM
+        if isinstance(st.session_state.get("zip_pdfs"), (bytes, bytearray)):
+            try:
+                with open(ZIP_FACTURAS_DISK_PATH, "wb") as fz:
+                    fz.write(st.session_state["zip_pdfs"])
+                st.session_state["zip_pdfs_path"] = ZIP_FACTURAS_DISK_PATH
+            except Exception:
+                pass
+            st.session_state["zip_pdfs"] = None
 
 
-# ESTADOS DE SESION LIMPIOS Y SANEAMIENTO PREVENTIVO DE MEMORIA RAM
-try:
-    asegurar_dicts_pdf_en_disco()
-except Exception:
-    pass
-for _k in ["df_procesado"]:
-    if _k in st.session_state and st.session_state[_k] is not None:
-        try:
-            if not isinstance(st.session_state[_k], pd.DataFrame):
+    # ESTADOS DE SESION LIMPIOS Y SANEAMIENTO PREVENTIVO DE MEMORIA RAM
+    try:
+        asegurar_dicts_pdf_en_disco()
+    except Exception:
+        pass
+    for _k in ["df_procesado"]:
+        if _k in st.session_state and st.session_state[_k] is not None:
+            try:
+                if not isinstance(st.session_state[_k], pd.DataFrame):
+                    st.session_state.pop(_k, None)
+            except Exception:
                 st.session_state.pop(_k, None)
-        except Exception:
-            st.session_state.pop(_k, None)
 
-if "autenticado" not in st.session_state:
-    st.session_state["autenticado"] = False
-if "empresa_activa" not in st.session_state:
-    st.session_state["empresa_activa"] = None
-if "proceso_activo" not in st.session_state:
-    st.session_state["proceso_activo"] = None
+    if "autenticado" not in st.session_state:
+        st.session_state["autenticado"] = False
+    if "empresa_activa" not in st.session_state:
+        st.session_state["empresa_activa"] = None
+    if "proceso_activo" not in st.session_state:
+        st.session_state["proceso_activo"] = None
 
-# PANTALLA 1: LOGIN
-if not st.session_state["autenticado"]:
-    col1, col2, col3 = st.columns(3)
-    with col2:
-        st.markdown("<h2 style='text-align: center; color: #0f172a;'>Cuentas Tuquiz</h2>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #64748b;'>Plataforma unificada para gestion contable y DIAN (Siigo / World Office)</p>", unsafe_allow_html=True)
+    # PANTALLA 1: LOGIN
+    if not st.session_state["autenticado"]:
+        col1, col2, col3 = st.columns(3)
+        with col2:
+            st.markdown("<h2 style='text-align: center; color: #0f172a;'>Cuentas Tuquiz</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: #64748b;'>Plataforma unificada para gestion contable y DIAN (Siigo / World Office)</p>", unsafe_allow_html=True)
 
-        with st.form("login_form"):
-            usuario = st.text_input("Usuario o Correo Electronico", value="deibydaza2014@gmail.com")
-            password = st.text_input("Contrasena", type="password", value="123456")
-            submit = st.form_submit_button("Ingresar al Ecosistema")
+            with st.form("login_form"):
+                usuario = st.text_input("Usuario o Correo Electronico", value="deibydaza2014@gmail.com")
+                password = st.text_input("Contrasena", type="password", value="123456")
+                submit = st.form_submit_button("Ingresar al Ecosistema")
 
-            if submit:
-                if usuario and password:
-                    st.session_state["autenticado"] = True
-                    st.rerun()
-                else:
-                    st.error("Ingresa usuario y contrasena.")
-    st.stop()
+                if submit:
+                    if usuario and password:
+                        st.session_state["autenticado"] = True
+                        st.rerun()
+                    else:
+                        st.error("Ingresa usuario y contrasena.")
+        st.stop()
 
-# PANTALLA 2: SELECTOR DE EMPRESAS CON RESPONSABILIDADES RUT
-EMPRESAS_DISPONIBLES = [
-    {
-        "nombre": "INDUMAQ ER SAS",
-        "nit": "901.346.412-5",
-        "actividad": "Comercio y Reparacion de Maquinaria / Importaciones",
-        "regimen": "Responsable de IVA",
-        "es_gran_contribuyente": False,
-        "es_autorretenedor": False,
-        "responsabilidades_rut": ["O-48"],
-        "estado": "ACTIVA",
-        "badge": "badge-active"
-    }
-]
+    # PANTALLA 2: SELECTOR DE EMPRESAS CON RESPONSABILIDADES RUT
+    EMPRESAS_DISPONIBLES = [
+        {
+            "nombre": "INDUMAQ ER SAS",
+            "nit": "901.346.412-5",
+            "actividad": "Comercio y Reparacion de Maquinaria / Importaciones",
+            "regimen": "Responsable de IVA",
+            "es_gran_contribuyente": False,
+            "es_autorretenedor": False,
+            "responsabilidades_rut": ["O-48"],
+            "estado": "ACTIVA",
+            "badge": "badge-active"
+        }
+    ]
 
-if not st.session_state["empresa_activa"]:
-    st.title("Seleccion de Empresa")
-    st.caption("Selecciona la entidad sobre la cual vas a trabajar:")
+    if not st.session_state["empresa_activa"]:
+        st.title("Seleccion de Empresa")
+        st.caption("Selecciona la entidad sobre la cual vas a trabajar:")
 
-    c1, c2 = st.columns(2)
-    for i, emp in enumerate(EMPRESAS_DISPONIBLES):
-        col = c1 if i % 2 == 0 else c2
-        with col:
-            st.markdown(f"""
-            <div class="card-box">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0; color:#0f172a;">\U0001f3e2 {emp['nombre']}</h3>
-                    <span class="{emp['badge']}">{emp['estado']}</span>
+        c1, c2 = st.columns(2)
+        for i, emp in enumerate(EMPRESAS_DISPONIBLES):
+            col = c1 if i % 2 == 0 else c2
+            with col:
+                st.markdown(f"""
+                <div class="card-box">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h3 style="margin:0; color:#0f172a;">\U0001f3e2 {emp['nombre']}</h3>
+                        <span class="{emp['badge']}">{emp['estado']}</span>
+                    </div>
+                    <p style="margin:8px 0 2px 0; color:#475569;"><b>NIT:</b> {emp['nit']} - <b>Regimen:</b> {emp['regimen']}</p>
+                    <p style="margin:2px 0 14px 0; color:#64748b; font-size:14px;">{emp['actividad']}</p>
                 </div>
-                <p style="margin:8px 0 2px 0; color:#475569;"><b>NIT:</b> {emp['nit']} - <b>Regimen:</b> {emp['regimen']}</p>
-                <p style="margin:2px 0 14px 0; color:#64748b; font-size:14px;">{emp['actividad']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            if emp["estado"] == "ACTIVA":
-                if st.button(f"Ingresar a {emp['nombre']}", key=f"btn_emp_{i}"):
-                    st.session_state["empresa_activa"] = emp
-                    st.session_state["proceso_activo"] = "facturacion"
-                    # registrar_actividad_sesion(emp)
-                    st.rerun()
-            else:
-                st.button(f"Pendiente Datos / Parametrizacion ({emp['estado']})", key=f"btn_emp_{i}", disabled=True)
-    st.stop()
+                """, unsafe_allow_html=True)
+                if emp["estado"] == "ACTIVA":
+                    if st.button(f"Ingresar a {emp['nombre']}", key=f"btn_emp_{i}"):
+                        st.session_state["empresa_activa"] = emp
+                        st.session_state["proceso_activo"] = "facturacion"
+                        # registrar_actividad_sesion(emp)
+                        st.rerun()
+                else:
+                    st.button(f"Pendiente Datos / Parametrizacion ({emp['estado']})", key=f"btn_emp_{i}", disabled=True)
+        st.stop()
 
-empresa = st.session_state["empresa_activa"]
+    empresa = st.session_state["empresa_activa"]
 
-# Sesion en memoria limpia
-pass
+    # Sesion en memoria limpia
+    pass
 
-# PANTALLA 3: MENU DE PROCESOS OPERATIVOS
-PROCESOS_SISTEMA = [
-    {
-        "id": "facturacion",
-        "icono": "Facturas",
-        "titulo": "Facturas de Compra, Venta y Devoluciones",
-        "desc": "Carga de reportes DIAN/Token, desbloqueo y renombrado de facturas por comprobante, auditoria contable y plantilla Siigo.",
-        "estado": "ACTIVO",
-        "badge": "badge-active"
-    },
-    {
-        "id": "nomina",
-        "icono": "Nomina",
-        "titulo": "Gestion Laboral y Nomina Electronica",
-        "desc": "Calculo de liquidacion de nomina, provisiones de prestaciones sociales, seguridad social y emision de soportes electronicos DIAN.",
-        "estado": "PROXIMAMENTE",
-        "badge": "badge-next"
-    },
-    {
-        "id": "conciliacion",
-        "icono": "Bancos",
-        "titulo": "Tesoreria y Conciliacion Bancaria",
-        "desc": "Cruce automatizado de extractos bancarios (Bancolombia, Davivienda) contra libros auxiliares y control de partidas conciliatorias.",
-        "estado": "PROXIMAMENTE",
-        "badge": "badge-next"
-    },
-    {
-        "id": "notas",
-        "icono": "Ajustes",
-        "titulo": "Notas de Contabilidad y Cierre Fiscal",
-        "desc": "Comprobantes de ajuste, amortizaciones de intangibles (NIC 38), depreciaciones y conciliacion fiscal NIIF vs. DIAN.",
-        "estado": "PROXIMAMENTE",
-        "badge": "badge-next"
-    }
-]
+    # PANTALLA 3: MENU DE PROCESOS OPERATIVOS
+    PROCESOS_SISTEMA = [
+        {
+            "id": "facturacion",
+            "icono": "Facturas",
+            "titulo": "Facturas de Compra, Venta y Devoluciones",
+            "desc": "Carga de reportes DIAN/Token, desbloqueo y renombrado de facturas por comprobante, auditoria contable y plantilla Siigo.",
+            "estado": "ACTIVO",
+            "badge": "badge-active"
+        },
+        {
+            "id": "nomina",
+            "icono": "Nomina",
+            "titulo": "Gestion Laboral y Nomina Electronica",
+            "desc": "Calculo de liquidacion de nomina, provisiones de prestaciones sociales, seguridad social y emision de soportes electronicos DIAN.",
+            "estado": "PROXIMAMENTE",
+            "badge": "badge-next"
+        },
+        {
+            "id": "conciliacion",
+            "icono": "Bancos",
+            "titulo": "Tesoreria y Conciliacion Bancaria",
+            "desc": "Cruce automatizado de extractos bancarios (Bancolombia, Davivienda) contra libros auxiliares y control de partidas conciliatorias.",
+            "estado": "PROXIMAMENTE",
+            "badge": "badge-next"
+        },
+        {
+            "id": "notas",
+            "icono": "Ajustes",
+            "titulo": "Notas de Contabilidad y Cierre Fiscal",
+            "desc": "Comprobantes de ajuste, amortizaciones de intangibles (NIC 38), depreciaciones y conciliacion fiscal NIIF vs. DIAN.",
+            "estado": "PROXIMAMENTE",
+            "badge": "badge-next"
+        }
+    ]
 
-if not st.session_state["proceso_activo"]:
-    col_t1, col_t2 = st.columns(2)
-    with col_t1:
-        st.subheader(f"{empresa['nombre']} - Panel de Procesos")
-        st.caption(f"NIT: {empresa['nit']} - Selecciona el modulo de trabajo que deseas ejecutar:")
-    with col_t2:
-        if st.button("Cambiar de Empresa"):
-            st.session_state["empresa_activa"] = None
+    if not st.session_state["proceso_activo"]:
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            st.subheader(f"{empresa['nombre']} - Panel de Procesos")
+            st.caption(f"NIT: {empresa['nit']} - Selecciona el modulo de trabajo que deseas ejecutar:")
+        with col_t2:
+            if st.button("Cambiar de Empresa"):
+                st.session_state["empresa_activa"] = None
+                st.session_state["proceso_activo"] = None
+                st.rerun()
+
+        st.markdown("---")
+
+        cp1, cp2 = st.columns(2)
+        for idx, proc in enumerate(PROCESOS_SISTEMA):
+            col_p = cp1 if idx % 2 == 0 else cp2
+            with col_p:
+                st.markdown(f"""
+                <div class="card-box">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h3 style="margin:0; color:#0f172a;">{proc['titulo']}</h3>
+                        <span class="{proc['badge']}">{proc['estado']}</span>
+                    </div>
+                    <p style="margin:12px 0 16px 0; color:#475569; font-size:14px; line-height:1.5;">{proc['desc']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                if proc["estado"] == "ACTIVO":
+                    if st.button(f"Abrir Modulo de Facturacion", key=f"btn_proc_{idx}"):
+                        st.session_state["proceso_activo"] = proc["id"]
+                        st.rerun()
+                else:
+                    st.button(f"Modulo en Construccion ({proc['estado']})", key=f"btn_proc_{idx}", disabled=True)
+        st.stop()
+
+    # PANTALLA 4: FACTURACION, AUDITORIA Y SIIGO
+    col_nav1, col_nav2 = st.columns(2)
+    with col_nav1:
+        st.subheader(f"{empresa['nombre']} - Facturacion, Auditoria y Siigo")
+        st.caption(f"NIT: {empresa['nit']} - Modulo Activo: Facturas de Compra, Venta y Devoluciones")
+    with col_nav2:
+        if st.button("Volver a Procesos"):
             st.session_state["proceso_activo"] = None
             st.rerun()
 
     st.markdown("---")
 
-    cp1, cp2 = st.columns(2)
-    for idx, proc in enumerate(PROCESOS_SISTEMA):
-        col_p = cp1 if idx % 2 == 0 else cp2
-        with col_p:
-            st.markdown(f"""
-            <div class="card-box">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0; color:#0f172a;">{proc['titulo']}</h3>
-                    <span class="{proc['badge']}">{proc['estado']}</span>
-                </div>
-                <p style="margin:12px 0 16px 0; color:#475569; font-size:14px; line-height:1.5;">{proc['desc']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            if proc["estado"] == "ACTIVO":
-                if st.button(f"Abrir Modulo de Facturacion", key=f"btn_proc_{idx}"):
-                    st.session_state["proceso_activo"] = proc["id"]
-                    st.rerun()
-            else:
-                st.button(f"Modulo en Construccion ({proc['estado']})", key=f"btn_proc_{idx}", disabled=True)
-    st.stop()
-
-# PANTALLA 4: FACTURACION, AUDITORIA Y SIIGO
-col_nav1, col_nav2 = st.columns(2)
-with col_nav1:
-    st.subheader(f"{empresa['nombre']} - Facturacion, Auditoria y Siigo")
-    st.caption(f"NIT: {empresa['nit']} - Modulo Activo: Facturas de Compra, Venta y Devoluciones")
-with col_nav2:
-    if st.button("Volver a Procesos"):
-        st.session_state["proceso_activo"] = None
-        st.rerun()
-
-st.markdown("---")
-
-# ==============================================================================
-# GESTOR DE HISTORIAL DE TRABAJOS Y AUDITORIAS PASADAS (PERSISTENCIA TOTAL)
-# ==============================================================================
-# Funciones de sesion y directorios centralizadas en la cabecera
+    # ==============================================================================
+    # GESTOR DE HISTORIAL DE TRABAJOS Y AUDITORIAS PASADAS (PERSISTENCIA TOTAL)
+    # ==============================================================================
+    # Funciones de sesion y directorios centralizadas en la cabecera
 
 
 
-def guardar_estado_manual(empresa_dict):
-    """Guarda en disco \u00fanicamente los datos contables modificados (DataFrame y Paquetes), sin procesar PDFs."""
-    if "df_procesado" not in st.session_state or st.session_state["df_procesado"] is None:
-        return False
-    try:
-        nit_clean = re.sub(r'\D', '', str(empresa_dict.get("nit", "empresa")))
-        d = os.path.join(DATA_DIR, nit_clean, "estado_manual")
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "df_procesado.pkl"), "wb") as f:
-            pickle.dump(st.session_state["df_procesado"], f)
-        if st.session_state.get("paquetes_importacion"):
-            with open(os.path.join(d, "paquetes_importacion.pkl"), "wb") as f:
-                pickle.dump(st.session_state["paquetes_importacion"], f)
-        if st.session_state.get("asientos_triangulacion_por_factura"):
-            with open(os.path.join(d, "asientos_triangulacion.pkl"), "wb") as f:
-                pickle.dump(st.session_state["asientos_triangulacion_por_factura"], f)
-        if st.session_state.get("facturas_no_contabilizar"):
-            with open(os.path.join(d, "facturas_no_contabilizar.json"), "w", encoding="utf-8") as f:
-                json.dump(list(st.session_state["facturas_no_contabilizar"]), f)
-        now_str = datetime.datetime.now().strftime("%d/%m/%Y %I:%M:%S %p")
-        meta = {
-            "fecha_guardado": now_str,
-            "total_facturas": len(st.session_state["df_procesado"]),
-            "archivo_excel": st.session_state.get("excel_nombre", "Reporte.xlsx")
-        }
-        with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
-        st.session_state["_ultimo_guardado_manual"] = now_str
-        st.session_state["_cached_respaldo_bytes"] = None
-        import gc
-        gc.collect()
-        return True
-    except Exception:
-        return False
-
-def cargar_estado_manual(empresa_dict):
-    """Restaura en memoria el \u00faltimo estado guardado manualmente por el usuario."""
-    try:
-        nit_clean = re.sub(r'\D', '', str(empresa_dict.get("nit", "empresa")))
-        d = os.path.join(DATA_DIR, nit_clean, "estado_manual")
-        df_p_path = os.path.join(d, "df_procesado.pkl")
-        if os.path.exists(df_p_path):
-            with open(df_p_path, "rb") as f:
-                st.session_state["df_procesado"] = normalizar_df_procesado(_limpiar_dtypes_pyarrow_df(pickle.load(f)))
-            pq_path = os.path.join(d, "paquetes_importacion.pkl")
-            if os.path.exists(pq_path):
-                with open(pq_path, "rb") as f:
-                    pqs_loaded = pickle.load(f)
-                    st.session_state["paquetes_importacion"] = pqs_loaded
-                    st.session_state["_ultimo_agentes_len"] = len(pqs_loaded)
-                    for pq_k, pq_v in pqs_loaded.items():
-                        if isinstance(pq_v, dict):
-                            if "asiento_fijo" in pq_v or "asiento_aprobado" in pq_v:
-                                st.session_state[f"paquete_listo_{pq_k}"] = True
-                            if "destino_siigo" in pq_v:
-                                st.session_state[f"paquete_destino_siigo_{pq_k}"] = pq_v["destino_siigo"]
-            as_path = os.path.join(d, "asientos_triangulacion.pkl")
-            if os.path.exists(as_path):
-                with open(as_path, "rb") as f:
-                    st.session_state["asientos_triangulacion_por_factura"] = pickle.load(f)
-            fn_path = os.path.join(d, "facturas_no_contabilizar.json")
-            if os.path.exists(fn_path):
-                with open(fn_path, "r", encoding="utf-8") as f:
-                    st.session_state["facturas_no_contabilizar"] = set(json.load(f))
-            meta_path = os.path.join(d, "meta.json")
-            if os.path.exists(meta_path):
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-                st.session_state["excel_nombre"] = meta.get("archivo_excel", "Reporte.xlsx")
-                st.session_state["_ultimo_guardado_manual"] = meta.get("fecha_guardado", "")
+    def guardar_estado_manual(empresa_dict):
+        """Guarda en disco \u00fanicamente los datos contables modificados (DataFrame y Paquetes), sin procesar PDFs."""
+        if "df_procesado" not in st.session_state or st.session_state["df_procesado"] is None:
+            return False
+        try:
+            nit_clean = re.sub(r'\D', '', str(empresa_dict.get("nit", "empresa")))
+            d = os.path.join(DATA_DIR, nit_clean, "estado_manual")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "df_procesado.pkl"), "wb") as f:
+                pickle.dump(st.session_state["df_procesado"], f)
+            if st.session_state.get("paquetes_importacion"):
+                with open(os.path.join(d, "paquetes_importacion.pkl"), "wb") as f:
+                    pickle.dump(st.session_state["paquetes_importacion"], f)
+            if st.session_state.get("asientos_triangulacion_por_factura"):
+                with open(os.path.join(d, "asientos_triangulacion.pkl"), "wb") as f:
+                    pickle.dump(st.session_state["asientos_triangulacion_por_factura"], f)
+            if st.session_state.get("facturas_no_contabilizar"):
+                with open(os.path.join(d, "facturas_no_contabilizar.json"), "w", encoding="utf-8") as f:
+                    json.dump(list(st.session_state["facturas_no_contabilizar"]), f)
+            now_str = datetime.datetime.now().strftime("%d/%m/%Y %I:%M:%S %p")
+            meta = {
+                "fecha_guardado": now_str,
+                "total_facturas": len(st.session_state["df_procesado"]),
+                "archivo_excel": st.session_state.get("excel_nombre", "Reporte.xlsx")
+            }
+            with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+            st.session_state["_ultimo_guardado_manual"] = now_str
+            st.session_state["_cached_respaldo_bytes"] = None
+            import gc
+            gc.collect()
             return True
-    except Exception:
-        pass
-    return False
+        except Exception:
+            return False
 
-def get_empresa_trabajos_dir(empresa_dict):
-    nit_clean = re.sub(r"\D", "", str(empresa_dict.get("nit", "empresa")))
-    d = os.path.join(DATA_DIR, nit_clean, "trabajos")
-    os.makedirs(d, exist_ok=True)
-    return d
+    def cargar_estado_manual(empresa_dict):
+        """Restaura en memoria el \u00faltimo estado guardado manualmente por el usuario."""
+        try:
+            nit_clean = re.sub(r'\D', '', str(empresa_dict.get("nit", "empresa")))
+            d = os.path.join(DATA_DIR, nit_clean, "estado_manual")
+            df_p_path = os.path.join(d, "df_procesado.pkl")
+            if os.path.exists(df_p_path):
+                with open(df_p_path, "rb") as f:
+                    st.session_state["df_procesado"] = normalizar_df_procesado(_limpiar_dtypes_pyarrow_df(pickle.load(f)))
+                pq_path = os.path.join(d, "paquetes_importacion.pkl")
+                if os.path.exists(pq_path):
+                    with open(pq_path, "rb") as f:
+                        pqs_loaded = pickle.load(f)
+                        st.session_state["paquetes_importacion"] = pqs_loaded
+                        st.session_state["_ultimo_agentes_len"] = len(pqs_loaded)
+                        for pq_k, pq_v in pqs_loaded.items():
+                            if isinstance(pq_v, dict):
+                                if "asiento_fijo" in pq_v or "asiento_aprobado" in pq_v:
+                                    st.session_state[f"paquete_listo_{pq_k}"] = True
+                                if "destino_siigo" in pq_v:
+                                    st.session_state[f"paquete_destino_siigo_{pq_k}"] = pq_v["destino_siigo"]
+                as_path = os.path.join(d, "asientos_triangulacion.pkl")
+                if os.path.exists(as_path):
+                    with open(as_path, "rb") as f:
+                        st.session_state["asientos_triangulacion_por_factura"] = pickle.load(f)
+                fn_path = os.path.join(d, "facturas_no_contabilizar.json")
+                if os.path.exists(fn_path):
+                    with open(fn_path, "r", encoding="utf-8") as f:
+                        st.session_state["facturas_no_contabilizar"] = set(json.load(f))
+                meta_path = os.path.join(d, "meta.json")
+                if os.path.exists(meta_path):
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                    st.session_state["excel_nombre"] = meta.get("archivo_excel", "Reporte.xlsx")
+                    st.session_state["_ultimo_guardado_manual"] = meta.get("fecha_guardado", "")
+                return True
+        except Exception:
+            pass
+        return False
 
-def guardar_trabajo_en_historial(empresa_dict, df_procesado, excel_bytes=None, excel_nombre="Reporte.xlsx", dict_pdfs_renombrados=None, dict_pdfs_originales=None, zip_bytes=None, consecutivo_ini=680, job_id=None):
-    try:
-        base_dir = get_empresa_trabajos_dir(empresa_dict)
-        if not job_id:
-            job_id = st.session_state.get("job_actual_id")
+    def get_empresa_trabajos_dir(empresa_dict):
+        nit_clean = re.sub(r"\D", "", str(empresa_dict.get("nit", "empresa")))
+        d = os.path.join(DATA_DIR, nit_clean, "trabajos")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def guardar_trabajo_en_historial(empresa_dict, df_procesado, excel_bytes=None, excel_nombre="Reporte.xlsx", dict_pdfs_renombrados=None, dict_pdfs_originales=None, zip_bytes=None, consecutivo_ini=680, job_id=None):
+        try:
+            base_dir = get_empresa_trabajos_dir(empresa_dict)
             if not job_id:
-                now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                job_id = f"job_{now_str}"
+                job_id = st.session_state.get("job_actual_id")
+                if not job_id:
+                    now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    job_id = f"job_{now_str}"
 
-        job_dir = os.path.join(base_dir, job_id)
-        os.makedirs(job_dir, exist_ok=True)
+            job_dir = os.path.join(base_dir, job_id)
+            os.makedirs(job_dir, exist_ok=True)
 
-        dir_renom = os.path.join(job_dir, "pdfs_renombrados")
-        os.makedirs(dir_renom, exist_ok=True)
-        dir_orig = os.path.join(job_dir, "pdfs_originales")
-        os.makedirs(dir_orig, exist_ok=True)
+            dir_renom = os.path.join(job_dir, "pdfs_renombrados")
+            os.makedirs(dir_renom, exist_ok=True)
+            dir_orig = os.path.join(job_dir, "pdfs_originales")
+            os.makedirs(dir_orig, exist_ok=True)
 
-        # 1. Guardar DataFrame procesado
-        if df_procesado is not None:
-            with open(os.path.join(job_dir, "df_procesado.pkl"), "wb") as f:
-                pickle.dump(df_procesado, f)
+            # 1. Guardar DataFrame procesado
+            if df_procesado is not None:
+                with open(os.path.join(job_dir, "df_procesado.pkl"), "wb") as f:
+                    pickle.dump(df_procesado, f)
 
-        # 2. Guardar archivo Excel original subido
-        if excel_bytes:
-            with open(os.path.join(job_dir, "excel_original.xlsx"), "wb") as f_ex:
-                f_ex.write(excel_bytes)
+            # 2. Guardar archivo Excel original subido
+            if excel_bytes:
+                with open(os.path.join(job_dir, "excel_original.xlsx"), "wb") as f_ex:
+                    f_ex.write(excel_bytes)
 
-        # 3. Guardar PDFs renombrados / separados (escritura inteligente: solo si no existe o cambio)
-        if dict_pdfs_renombrados:
-            for fname, bdata in dict_pdfs_renombrados.items():
-                p_ren = os.path.join(dir_renom, fname)
-                if not os.path.exists(p_ren) or os.path.getsize(p_ren) != len(bdata):
-                    with open(p_ren, "wb") as pf:
-                        pf.write(bdata)
+            # 3. Guardar PDFs renombrados / separados (escritura inteligente: solo si no existe o cambio)
+            if dict_pdfs_renombrados:
+                for fname, bdata in dict_pdfs_renombrados.items():
+                    p_ren = os.path.join(dir_renom, fname)
+                    if not os.path.exists(p_ren) or os.path.getsize(p_ren) != len(bdata):
+                        with open(p_ren, "wb") as pf:
+                            pf.write(bdata)
 
-        # 4. Guardar PDFs originales subidos (escritura inteligente: solo si no existe o cambio)
-        if dict_pdfs_originales:
-            for fname, bdata in dict_pdfs_originales.items():
-                p_ori = os.path.join(dir_orig, fname)
-                if not os.path.exists(p_ori) or os.path.getsize(p_ori) != len(bdata):
-                    with open(p_ori, "wb") as pf:
-                        pf.write(bdata)
+            # 4. Guardar PDFs originales subidos (escritura inteligente: solo si no existe o cambio)
+            if dict_pdfs_originales:
+                for fname, bdata in dict_pdfs_originales.items():
+                    p_ori = os.path.join(dir_orig, fname)
+                    if not os.path.exists(p_ori) or os.path.getsize(p_ori) != len(bdata):
+                        with open(p_ori, "wb") as pf:
+                            pf.write(bdata)
 
-        # 5. Guardar paquete ZIP de facturas si existe
-        if zip_bytes:
-            with open(os.path.join(job_dir, "paquete_facturas.zip"), "wb") as zf:
-                zf.write(zip_bytes)
+            # 5. Guardar paquete ZIP de facturas si existe
+            if zip_bytes:
+                with open(os.path.join(job_dir, "paquete_facturas.zip"), "wb") as zf:
+                    zf.write(zip_bytes)
 
-        # 6. Guardar paquetes de importacion y triangulacion
-        if "paquetes_importacion" in st.session_state and st.session_state["paquetes_importacion"]:
-            try:
-                with open(os.path.join(job_dir, "paquetes_importacion.pkl"), "wb") as f_pq:
-                    pickle.dump(st.session_state["paquetes_importacion"], f_pq)
-            except Exception:
-                pass
-
-        # 7. Guardar asientos aprobados de triangulacion
-        if "asientos_triangulacion_por_factura" in st.session_state and st.session_state["asientos_triangulacion_por_factura"]:
-            try:
-                with open(os.path.join(job_dir, "asientos_triangulacion.pkl"), "wb") as f_as:
-                    pickle.dump(st.session_state["asientos_triangulacion_por_factura"], f_as)
-            except Exception:
-                pass
-
-        # 8. Guardar estado general de la sesion (paquetes listos, opciones, facturas excluidas)
-        try:
-            estado_flags = {
-                "paquetes_listos": {k: v for k, v in st.session_state.items() if k.startswith("paquete_listo_")},
-                "paquetes_destino_siigo": {k: v for k, v in st.session_state.items() if k.startswith("paquete_destino_siigo_")},
-                "enviar_gp": {k: v for k, v in st.session_state.items() if k.startswith("enviar_gp_pq_")},
-                "enviar_h2": {k: v for k, v in st.session_state.items() if k.startswith("enviar_h2_pq_")},
-                "enviar_nd": {k: v for k, v in st.session_state.items() if k.startswith("enviar_nd_pq_")},
-                "facturas_no_contabilizar": list(st.session_state.get("facturas_no_contabilizar", set())),
-                "sel_paquete_activo_key": st.session_state.get("sel_paquete_activo_key", 1)
-            }
-            with open(os.path.join(job_dir, "estado_sesion.json"), "w", encoding="utf-8") as f_es:
-                json.dump(estado_flags, f_es, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
-        now_disp = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
-        # Verificar archivos fisicos guardados en disco
-        n_orig_disco = len(os.listdir(dir_orig)) if os.path.exists(dir_orig) else 0
-        n_renom_disco = len(os.listdir(dir_renom)) if os.path.exists(dir_renom) else 0
-        tiene_excel = os.path.exists(os.path.join(job_dir, "excel_original.xlsx")) or (excel_bytes is not None)
-
-        meta = {
-            "id": job_id,
-            "nombre_trabajo": f"Trabajo del {now_disp} ({excel_nombre})",
-            "archivo_excel": excel_nombre,
-            "tiene_excel": tiene_excel,
-            "fecha": now_disp,
-            "total_facturas": len(df_procesado) if df_procesado is not None else 0,
-            "consecutivo_inicial": consecutivo_ini,
-            "total_valor": float(df_procesado["Total"].sum()) if (df_procesado is not None and "Total" in df_procesado) else 0.0,
-            "total_pdfs_renombrados": n_renom_disco,
-            "total_pdfs_originales": n_orig_disco
-        }
-        with open(os.path.join(job_dir, "meta.json"), "w", encoding="utf-8") as mf:
-            json.dump(meta, mf, ensure_ascii=False, indent=2)
-
-        # Actualizar indice general de la empresa para carga inmediata
-        idx_file = os.path.join(base_dir, "historial_index.json")
-        try:
-            with open(idx_file, "r", encoding="utf-8") as f_idx:
-                index_data = json.load(f_idx)
-        except Exception:
-            index_data = []
-        index_data = [x for x in index_data if x.get("id") != job_id]
-        index_data.append(meta)
-        index_data.sort(key=lambda x: x.get("id", ""), reverse=True)
-        try:
-            with open(idx_file, "w", encoding="utf-8") as f_idx:
-                json.dump(index_data, f_idx, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
-        return job_id
-    except Exception:
-        return None
-
-
-
-def listar_trabajos_historial(empresa_dict):
-    base_dir = get_empresa_trabajos_dir(empresa_dict)
-    lista = []
-    idx_file = os.path.join(base_dir, "historial_index.json")
-    if os.path.exists(idx_file):
-        try:
-            with open(idx_file, "r", encoding="utf-8") as f_idx:
-                raw_l = json.load(f_idx)
-                if isinstance(raw_l, list):
-                    lista = raw_l
-        except Exception:
-            lista = []
-    if not lista and os.path.exists(base_dir):
-        for jid in os.listdir(base_dir):
-            jdir = os.path.join(base_dir, jid)
-            meta_file = os.path.join(jdir, "meta.json")
-            if os.path.isdir(jdir) and os.path.exists(meta_file):
+            # 6. Guardar paquetes de importacion y triangulacion
+            if "paquetes_importacion" in st.session_state and st.session_state["paquetes_importacion"]:
                 try:
-                    with open(meta_file, "r", encoding="utf-8") as mf:
-                        meta = json.load(mf)
-                        lista.append(meta)
+                    with open(os.path.join(job_dir, "paquetes_importacion.pkl"), "wb") as f_pq:
+                        pickle.dump(st.session_state["paquetes_importacion"], f_pq)
                 except Exception:
                     pass
 
-    # Normalizar campos y verificar que exista df_procesado.pkl
-    valida = []
-    for item in lista:
-        if isinstance(item, dict) and "id" in item:
-            jdir = os.path.join(base_dir, item["id"])
-            if os.path.exists(os.path.join(jdir, "df_procesado.pkl")):
-                item.setdefault("total_facturas", 0)
-                item.setdefault("total_valor", 0.0)
-                item.setdefault("nombre_trabajo", f"Trabajo {item['id']}")
-                valida.append(item)
+            # 7. Guardar asientos aprobados de triangulacion
+            if "asientos_triangulacion_por_factura" in st.session_state and st.session_state["asientos_triangulacion_por_factura"]:
+                try:
+                    with open(os.path.join(job_dir, "asientos_triangulacion.pkl"), "wb") as f_as:
+                        pickle.dump(st.session_state["asientos_triangulacion_por_factura"], f_as)
+                except Exception:
+                    pass
 
-    valida.sort(key=lambda x: x.get("id", ""), reverse=True)
-    return valida
+            # 8. Guardar estado general de la sesion (paquetes listos, opciones, facturas excluidas)
+            try:
+                estado_flags = {
+                    "paquetes_listos": {k: v for k, v in st.session_state.items() if k.startswith("paquete_listo_")},
+                    "paquetes_destino_siigo": {k: v for k, v in st.session_state.items() if k.startswith("paquete_destino_siigo_")},
+                    "enviar_gp": {k: v for k, v in st.session_state.items() if k.startswith("enviar_gp_pq_")},
+                    "enviar_h2": {k: v for k, v in st.session_state.items() if k.startswith("enviar_h2_pq_")},
+                    "enviar_nd": {k: v for k, v in st.session_state.items() if k.startswith("enviar_nd_pq_")},
+                    "facturas_no_contabilizar": list(st.session_state.get("facturas_no_contabilizar", set())),
+                    "sel_paquete_activo_key": st.session_state.get("sel_paquete_activo_key", 1)
+                }
+                with open(os.path.join(job_dir, "estado_sesion.json"), "w", encoding="utf-8") as f_es:
+                    json.dump(estado_flags, f_es, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
 
-def cargar_trabajo_historial(empresa_dict, job_id):
-    base_dir = get_empresa_trabajos_dir(empresa_dict)
-    jdir = os.path.join(base_dir, job_id)
-    df = None
-    dict_renom = {}
-    dict_orig = {}
-    zip_bytes = None
-    excel_bytes = None
-    excel_nombre = "Reporte.xlsx"
+            now_disp = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
+            # Verificar archivos fisicos guardados en disco
+            n_orig_disco = len(os.listdir(dir_orig)) if os.path.exists(dir_orig) else 0
+            n_renom_disco = len(os.listdir(dir_renom)) if os.path.exists(dir_renom) else 0
+            tiene_excel = os.path.exists(os.path.join(job_dir, "excel_original.xlsx")) or (excel_bytes is not None)
 
-    meta_file = os.path.join(jdir, "meta.json")
-    if os.path.exists(meta_file):
-        try:
-            with open(meta_file, "r", encoding="utf-8") as mf:
-                m_data = json.load(mf)
-                excel_nombre = m_data.get("archivo_excel", "Reporte.xlsx")
-        except:
-            pass
+            meta = {
+                "id": job_id,
+                "nombre_trabajo": f"Trabajo del {now_disp} ({excel_nombre})",
+                "archivo_excel": excel_nombre,
+                "tiene_excel": tiene_excel,
+                "fecha": now_disp,
+                "total_facturas": len(df_procesado) if df_procesado is not None else 0,
+                "consecutivo_inicial": consecutivo_ini,
+                "total_valor": float(df_procesado["Total"].sum()) if (df_procesado is not None and "Total" in df_procesado) else 0.0,
+                "total_pdfs_renombrados": n_renom_disco,
+                "total_pdfs_originales": n_orig_disco
+            }
+            with open(os.path.join(job_dir, "meta.json"), "w", encoding="utf-8") as mf:
+                json.dump(meta, mf, ensure_ascii=False, indent=2)
 
-    pkl_file = os.path.join(jdir, "df_procesado.pkl")
-    if os.path.exists(pkl_file):
-        with open(pkl_file, "rb") as f:
-            df = pickle.load(f)
-
-    ex_file = os.path.join(jdir, "excel_original.xlsx")
-    if os.path.exists(ex_file):
-        with open(ex_file, "rb") as f_ex:
-            excel_bytes = f_ex.read()
-
-    # PDFs renombrados respaldados en disco (0 MB en RAM)
-    dict_renom = DiskBackedPDFDict("renom_pdfs")
-    pdf_dir_r = os.path.join(jdir, "pdfs_renombrados")
-    if not os.path.exists(pdf_dir_r):
-        pdf_dir_r = os.path.join(jdir, "pdfs")
-    if os.path.exists(pdf_dir_r):
-        for fn in os.listdir(pdf_dir_r):
-            if fn.endswith(".pdf"):
-                dict_renom[fn] = os.path.join(pdf_dir_r, fn)
-
-    # PDFs originales respaldados en disco (0 MB en RAM)
-    dict_orig = DiskBackedPDFDict("raw_pdfs")
-    pdf_dir_o = os.path.join(jdir, "pdfs_originales")
-    if os.path.exists(pdf_dir_o):
-        for fn in os.listdir(pdf_dir_o):
-            if fn.endswith(".pdf"):
-                dict_orig[fn] = os.path.join(pdf_dir_o, fn)
-
-    zip_file = os.path.join(jdir, "paquete_facturas.zip")
-    if os.path.exists(zip_file):
-        st.session_state["zip_pdfs_path"] = zip_file
-        zip_bytes = None
-
-    # Restaurar paquetes de importacion
-    pq_file = os.path.join(jdir, "paquetes_importacion.pkl")
-    if os.path.exists(pq_file):
-        try:
-            with open(pq_file, "rb") as f_pq:
-                st.session_state["paquetes_importacion"] = pickle.load(f_pq)
-        except Exception:
-            pass
-
-    # Restaurar asientos aprobados de triangulacion
-    as_file = os.path.join(jdir, "asientos_triangulacion.pkl")
-    if os.path.exists(as_file):
-        try:
-            with open(as_file, "rb") as f_as:
-                st.session_state["asientos_triangulacion_por_factura"] = pickle.load(f_as)
-        except Exception:
-            pass
-
-    # Restaurar flags de estado (paquetes listos, opciones, facturas excluidas)
-    es_file = os.path.join(jdir, "estado_sesion.json")
-    if os.path.exists(es_file):
-        try:
-            with open(es_file, "r", encoding="utf-8") as f_es:
-                est = json.load(f_es)
-                for k, v in est.get("paquetes_listos", {}).items():
-                    st.session_state[k] = v
-                for k, v in est.get("paquetes_destino_siigo", {}).items():
-                    st.session_state[k] = v
-                for k, v in est.get("enviar_gp", {}).items():
-                    st.session_state[k] = v
-                for k, v in est.get("enviar_h2", {}).items():
-                    st.session_state[k] = v
-                for k, v in est.get("enviar_nd", {}).items():
-                    st.session_state[k] = v
-                if "facturas_no_contabilizar" in est:
-                    st.session_state["facturas_no_contabilizar"] = set(est["facturas_no_contabilizar"])
-                if "sel_paquete_activo_key" in est:
-                    st.session_state["sel_paquete_activo_key"] = est["sel_paquete_activo_key"]
-        except Exception:
-            pass
-
-    return df, dict_renom, dict_orig, excel_bytes, excel_nombre, zip_bytes
-
-def eliminar_trabajo_historial(empresa_dict, job_id):
-    base_dir = get_empresa_trabajos_dir(empresa_dict)
-    jdir = os.path.join(base_dir, job_id)
-    if os.path.exists(jdir):
-        shutil.rmtree(jdir, ignore_errors=True)
-    idx_file = os.path.join(base_dir, "historial_index.json")
-    if os.path.exists(idx_file):
-        try:
-            with open(idx_file, "r", encoding="utf-8") as f_idx:
-                index_data = json.load(f_idx)
+            # Actualizar indice general de la empresa para carga inmediata
+            idx_file = os.path.join(base_dir, "historial_index.json")
+            try:
+                with open(idx_file, "r", encoding="utf-8") as f_idx:
+                    index_data = json.load(f_idx)
+            except Exception:
+                index_data = []
             index_data = [x for x in index_data if x.get("id") != job_id]
-            with open(idx_file, "w", encoding="utf-8") as f_idx:
-                json.dump(index_data, f_idx, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
-def exportar_respaldo_sesion_zip(empresa_dict, df_proc, dict_renom, dict_orig, excel_b, excel_n, zip_p=None):
-    """Empaqueta toda la sesi\u00f3n contable en un archivo ZIP descargable para respaldo indestructible con paquetes y triangulaciones."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        if df_proc is not None:
-            zf.writestr("df_procesado.pkl", pickle.dumps(df_proc))
-        if excel_b:
-            zf.writestr("excel_original.xlsx", excel_b)
-        if zip_p:
-            zf.writestr("paquete_facturas.zip", zip_p)
-
-        # Incluir paquetes de importacion y asientos de triangulacion si existen
-        if "paquetes_importacion" in st.session_state and st.session_state["paquetes_importacion"]:
-            zf.writestr("paquetes_importacion.pkl", pickle.dumps(st.session_state["paquetes_importacion"]))
-        if "asientos_triangulacion_por_factura" in st.session_state and st.session_state["asientos_triangulacion_por_factura"]:
-            zf.writestr("asientos_triangulacion.pkl", pickle.dumps(st.session_state["asientos_triangulacion_por_factura"]))
-
-        # Incluir estado completo de la sesion
-        estado_flags = {
-            "paquetes_listos": {k: v for k, v in st.session_state.items() if k.startswith("paquete_listo_")},
-            "enviar_gp": {k: v for k, v in st.session_state.items() if k.startswith("enviar_gp_pq_")},
-            "enviar_h2": {k: v for k, v in st.session_state.items() if k.startswith("enviar_h2_pq_")},
-            "enviar_nd": {k: v for k, v in st.session_state.items() if k.startswith("enviar_nd_pq_")},
-            "facturas_no_contabilizar": list(st.session_state.get("facturas_no_contabilizar", set())),
-            "sel_paquete_activo_key": st.session_state.get("sel_paquete_activo_key", 1)
-        }
-        zf.writestr("estado_sesion.json", json.dumps(estado_flags, ensure_ascii=False, indent=2))
-
-        now_str = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
-        meta = {
-            "empresa": empresa_dict.get("nombre", ""),
-            "nit": empresa_dict.get("nit", ""),
-            "excel_nombre": excel_n or "Reporte.xlsx",
-            "archivo_excel": excel_n or "Reporte.xlsx",
-            "fecha_respaldo": now_str,
-            "total_facturas": len(df_proc) if df_proc is not None else 0,
-            "total_pdfs_renombrados": len(dict_renom) if dict_renom else 0,
-            "total_pdfs_originales": len(dict_orig) if dict_orig else 0
-        }
-        zf.writestr("meta_sesion.json", json.dumps(meta, ensure_ascii=False, indent=2))
-        mem_actual = cargar_memoria_aprendizaje(empresa_dict)
-        if mem_actual:
-            zf.writestr("memoria_aprendizaje.json", json.dumps(mem_actual, ensure_ascii=False, indent=2))
-        zf.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
-        # PDFs ya vienen comprimidos internamente (FlateDecode). Usar compresion directa ultra-rapida
-        if dict_renom:
-            for fn, bdata in dict_renom.items():
-                zinfo = zipfile.ZipInfo(f"pdfs_renombrados/{fn}")
-                zinfo.compress_type = zipfile.ZIP_STORED
-                zf.writestr(zinfo, bdata)
-        if dict_orig:
-            for fn, bdata in dict_orig.items():
-                zinfo = zipfile.ZipInfo(f"pdfs_originales/{fn}")
-                zinfo.compress_type = zipfile.ZIP_STORED
-                zf.writestr(zinfo, bdata)
-    buf.seek(0)
-    return buf.getvalue()
-
-
-def obtener_respaldo_sesion_cached(empresa_dict):
-    """Devuelve el archivo de respaldo cacheado en memoria, regener\u00e1ndolo solo cuando hay cambios."""
-    if "df_procesado" not in st.session_state or st.session_state["df_procesado"] is None:
-        return b""
-    df_p = st.session_state["df_procesado"]
-    d_ren = st.session_state.get("dict_pdfs", {})
-    d_ori = st.session_state.get("raw_uploaded_pdfs", {})
-    sig_actual = f"{len(df_p)}_{len(d_ren)}_{len(d_ori)}_{st.session_state.get('_ultimo_autosave_hora', '')}"
-    if st.session_state.get("_cached_respaldo_sig") != sig_actual or "_cached_respaldo_bytes" not in st.session_state:
-        b_data = exportar_respaldo_sesion_zip(
-            empresa_dict, df_p, d_ren, d_ori,
-            st.session_state.get("excel_bytes"),
-            st.session_state.get("excel_nombre", "Reporte.xlsx"),
-            st.session_state.get("zip_pdfs")
-        )
-        st.session_state["_cached_respaldo_bytes"] = b_data
-        st.session_state["_cached_respaldo_sig"] = sig_actual
-    return st.session_state.get("_cached_respaldo_bytes", b"")
-
-def importar_respaldo_sesion_zip(zip_bytes, empresa_dict):
-    """Restaura una sesi\u00f3n contable completa desde un archivo ZIP de respaldo."""
-    try:
-        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
-            df_proc = None
-            if "df_procesado.pkl" in zf.namelist():
-                df_proc = pickle.loads(zf.read("df_procesado.pkl"))
-            excel_b = zf.read("excel_original.xlsx") if "excel_original.xlsx" in zf.namelist() else None
-            zip_p = zf.read("paquete_facturas.zip") if "paquete_facturas.zip" in zf.namelist() else None
-            excel_n = "Reporte_Restaurado.xlsx"
-            if "meta_sesion.json" in zf.namelist():
-                try:
-                    m = json.loads(zf.read("meta_sesion.json").decode("utf-8"))
-                    excel_n = m.get("excel_nombre", excel_n)
-                except:
-                    pass
-            dict_renom = {}
-            dict_orig = {}
-            for name in zf.namelist():
-                if name.startswith("pdfs_renombrados/") and name.endswith(".pdf"):
-                    fn = name.replace("pdfs_renombrados/", "")
-                    dict_renom[fn] = zf.read(name)
-                elif name.startswith("pdfs_originales/") and name.endswith(".pdf"):
-                    fn = name.replace("pdfs_originales/", "")
-                    dict_orig[fn] = zf.read(name)
-            return df_proc, dict_renom, dict_orig, excel_b, excel_n, zip_p
-    except Exception as e:
-        return None, {}, {}, None, "", None
-
-# ==============================================================================
-# MOTOR DE TRIANGULACION Y CRUCES DE IMPORTACION (ADUANAS Y PAGOS A TERCEROS)
-# ==============================================================================
-CUENTA_RETENCION_ASUMIDA = "53152001"
-CUENTA_NO_DEDUCIBLE = "53950501"
-CUENTA_IVA_IMPORTACION = "240835"
-CUENTA_IMPORTACION_TRANSITO = "14650501"
-CUENTA_CXP_AGENCIA_EXTERIOR = "22050505"
-CUENTA_CXP_DHL_NACIONAL = "23359501"
-CUENTA_CXP_EURO_SHIPPING = "22050501"
-
-def normalizar_fecha_dian(fecha_raw):
-    """Normaliza cualquier formato de fecha a DD/MM/AAAA para Siigo y DIAN."""
-    if not fecha_raw:
-        return ""
-    s = str(fecha_raw).strip()
-    m = re.match(r'^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$', s)
-    if m:
-        d, m_val, y = m.groups()
-        return f"{int(d):02d}/{int(m_val):02d}/{y}"
-    m_iso = re.match(r'^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})', s)
-    if m_iso:
-        y, m_val, d = m_iso.groups()
-        return f"{int(d):02d}/{int(m_val):02d}/{y}"
-    return s
-
-def analizar_estado_filas_excel(excel_bytes):
-    """
-    Lee las celdas del archivo Excel DIAN (token) con openpyxl para detectar:
-    1. Celdas rojas (facturas ya causadas/registradas en Siigo).
-    2. Columna1 con n\u00famero de comprobante 10-XXX o texto 'registrada'.
-    3. Columna3 con asignaci\u00f3n de Grupo de Importaci\u00f3n (1, 2, 3...).
-    4. Columna4 con cuenta contable de pasivo espec\u00edfica (22050505, 23359501, etc.).
-    """
-    estados = {}
-    if not excel_bytes:
-        return estados
-
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), data_only=True)
-        ws = wb.active
-        headers = [str(cell.value or '').strip() for cell in ws[1]]
-
-        col_c1 = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['columna1', 'comprobante', 'estado'])), None)
-        col_grp = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['columna3', 'grupo', 'paquete'])), None)
-        col_cta = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['columna4', 'cuenta', 'cta'])), None)
-        col_cufe = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['cufe', 'token', 'uuid', 'cude'])), None)
-        col_folio = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['folio', 'factura'])), None)
-        col_pref = next((i for i, h in enumerate(headers) if 'prefijo' in h.lower()), None)
-
-        for row_idx in range(2, ws.max_row + 1):
-            row_cells = ws[row_idx]
-            es_roja = False
-
-            # Revisar color de relleno de las celdas
-            for cell in row_cells:
-                fill = cell.fill
-                if fill and fill.fill_type:
-                    color = fill.start_color
-                    if color:
-                        rgb = str(getattr(color, 'rgb', '') or getattr(color, 'value', '')).upper()
-                        if any(r in rgb for r in ['FF0000', 'C00000', 'FFC7CE', 'EF4444', 'DC2626', 'B91C1C', '991B1B', 'F87171', 'FF6666', 'FF4D4D', 'E11D48']):
-                            es_roja = True
-                            break
-                        if len(rgb) == 8:
-                            try:
-                                r_v = int(rgb[2:4], 16)
-                                g_v = int(rgb[4:6], 16)
-                                b_v = int(rgb[6:8], 16)
-                                if (r_v > 180 and g_v < 130 and b_v < 130) or (r_v > 220 and g_v < 210 and b_v < 215 and r_v - g_v > 30):
-                                    es_roja = True
-                                    break
-                            except:
-                                pass
-
-            val_c1 = str(row_cells[col_c1].value or '').strip() if col_c1 is not None and col_c1 < len(row_cells) else ''
-            if '10-' in val_c1 or 'registrad' in val_c1.lower() or 'causad' in val_c1.lower():
-                es_roja = True
-
-            val_grp = str(row_cells[col_grp].value or '').strip() if col_grp is not None and col_grp < len(row_cells) else ''
-            val_cta = str(row_cells[col_cta].value or '').strip() if col_cta is not None and col_cta < len(row_cells) else ''
-            if val_cta.endswith('.0'):
-                val_cta = val_cta[:-2]
-
-            cufe_k = str(row_cells[col_cufe].value or '').strip() if col_cufe is not None and col_cufe < len(row_cells) else ''
-            fol_k = str(row_cells[col_folio].value or '').strip() if col_folio is not None and col_folio < len(row_cells) else ''
-            if fol_k.endswith('.0'):
-                fol_k = fol_k[:-2]
-            pref_k = str(row_cells[col_pref].value or '').strip() if col_pref is not None and col_pref < len(row_cells) else ''
-            if pref_k == 'nan' or pref_k == 'None':
-                pref_k = ''
-
-            fac_key = f"{pref_k}-{fol_k}" if pref_k else fol_k
-
-            info_fila = {
-                'row_idx': row_idx,
-                'es_roja': es_roja,
-                'comprobante_existente': val_c1 if '10-' in val_c1 else ('10-Previa' if es_roja else ''),
-                'grupo_importacion': val_grp,
-                'cuenta_especifica': val_cta
-            }
-            if cufe_k:
-                estados[cufe_k] = info_fila
-            if fac_key:
-                estados[fac_key] = info_fila
-            estados[row_idx - 2] = info_fila
-    except Exception as e:
-        pass
-
-    return estados
-
-def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
-    """Genera el asiento contable EXACTO e ID\u00c9NTICO al que visualiza la Hoja 2 (Auditor\u00eda)."""
-    asiento_filas = []
-    es_nc = "Devolucion" in str(fac_sel.get("Operacion", ""))
-    asume_ret = bool(fac_sel.get("Impuestos Asumidos", False))
-    cta_cxp_usar = str(fac_sel.get("Cuenta Pasivo Especifica") or fac_sel.get("Cta Contrapartida") or ("22050505" if es_aduanero else "22050501")).strip()
-    cta_p = str(fac_sel.get("Cta Principal") or "14650501").strip()
-    if cta_p in ["146505", "1465"]:
-        cta_p = "14650501"
-    es_importacion_factura = es_aduanero or "1465" in cta_p or "IMPORTACI" in str(fac_sel.get("Categor\u00eda", "")).upper()
-    cta_iva = str(fac_sel.get("Cta IVA") or ("24081501" if es_importacion_factura else "24081001")).strip()
-
-    def _sf(v):
-        try:
-            if v is not None and pd.notna(v):
-                fv = float(v)
-                return fv if not pd.isna(fv) else 0.0
-        except Exception:
-            pass
-        return 0.0
-
-    base_val = _sf(fac_sel.get("Base"))
-    iva_val = _sf(fac_sel.get("IVA"))
-    iva_5_val = _sf(fac_sel.get("IVA 5%"))
-    iva_19_val = _sf(fac_sel.get("IVA 19%"))
-    if iva_5_val > 0:
-        if iva_19_val <= 0 and iva_val > iva_5_val:
-            iva_19_val = round(iva_val - iva_5_val, 2)
-        iva_val = round(iva_19_val + iva_5_val, 2)
-    else:
-        iva_19_val = iva_val
-    base_19_val = _sf(fac_sel.get("Base IVA 19%")) or (round(iva_19_val / 0.19, 2) if iva_5_val > 0 and iva_19_val > 0 else base_val)
-    base_5_val = _sf(fac_sel.get("Base IVA 5%")) or (round(iva_5_val / 0.05, 2) if iva_5_val > 0 else 0.0)
-    inc_otros_val = _sf(fac_sel.get("INC / Otros Impuestos"))
-    cta_iva_5 = _limpiar_codigo_cta(fac_sel.get("Cta IVA 5%"), "24081003")
-    tot_val = _sf(fac_sel.get("Total"))
-    rfte_val = _sf(fac_sel.get("ReteFuente"))
-    rica_val = _sf(fac_sel.get("ReteICA"))
-    riva_val = _sf(fac_sel.get("ReteIVA"))
-    iva_imp_val = _sf(fac_sel.get("IVA Importaci\u00f3n"))
-
-    raw_cta_imp = fac_sel.get("Cta IVA Importaci\u00f3n")
-    if raw_cta_imp is None or pd.isna(raw_cta_imp) or str(raw_cta_imp).strip() in ["", "nan", "None"]:
-        cta_iva_imp = "240835"
-    else:
-        cta_iva_imp = str(raw_cta_imp).strip()
-
-    # 1. Base / Costo
-    asiento_filas.append({
-        "C\u00f3digo Cuenta": cta_p,
-        "Descripci\u00f3n de la Cuenta": "{} - {}".format(fac_sel.get("Categor\u00eda", "Gasto/Costo"), str(fac_sel.get("Proveedor", ""))[:25]),
-        "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-        "D\u00e9bito ($)": 0.0 if es_nc else base_val,
-        "Cr\u00e9dito ($)": base_val if es_nc else 0.0
-    })
-
-    # 1.B INC / Impoconsumo 8% / Bolsas (Mayor valor del gasto/costo)
-    if inc_otros_val > 0:
-        asiento_filas.append({
-            "C\u00f3digo Cuenta": cta_p,
-            "Descripci\u00f3n de la Cuenta": f"INC 8% / Otros Impuestos No Descontables (Mayor valor {cta_p})",
-            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-            "D\u00e9bito ($)": 0.0 if es_nc else inc_otros_val,
-            "Cr\u00e9dito ($)": inc_otros_val if es_nc else 0.0
-        })
-
-    # 2.A IVA Descontable 19% (Servicios 24081501 / Compras 24081001)
-    if iva_19_val > 0:
-        desc_iva = f"IVA Descontable Servicios 19% (Base: ${base_19_val:,.0f})" if ("24081501" in cta_iva or es_importacion_factura) else f"IVA Descontable 19% (Base: ${base_19_val:,.0f})"
-        asiento_filas.append({
-            "C\u00f3digo Cuenta": cta_iva,
-            "Descripci\u00f3n de la Cuenta": desc_iva,
-            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-            "D\u00e9bito ($)": 0.0 if es_nc else iva_19_val,
-            "Cr\u00e9dito ($)": iva_19_val if es_nc else 0.0
-        })
-
-    # 2.A-2 IVA Descontable 5% (Compras 24081003)
-    if iva_5_val > 0:
-        asiento_filas.append({
-            "C\u00f3digo Cuenta": cta_iva_5,
-            "Descripci\u00f3n de la Cuenta": f"IVA Descontable 5% (Base: ${base_5_val:,.0f})",
-            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-            "D\u00e9bito ($)": 0.0 if es_nc else iva_5_val,
-            "Cr\u00e9dito ($)": iva_5_val if es_nc else 0.0
-        })
-
-    # 2.B IVA de Importacion (Cuenta 240835) - Solo para facturas de importacion
-    if iva_imp_val > 0:
-        asiento_filas.append({
-            "C\u00f3digo Cuenta": cta_iva_imp,
-            "Descripci\u00f3n de la Cuenta": f"IVA de Importaci\u00f3n (Cta 240835) - Fac {fac_sel.get('Factura', '')}",
-            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-            "D\u00e9bito ($)": 0.0 if es_nc else iva_imp_val,
-            "Cr\u00e9dito ($)": iva_imp_val if es_nc else 0.0
-        })
-
-    es_transp_as = ("TRANSP" in str(fac_sel.get("Categor\u00eda", "")).upper() or
-                    "TRANSP" in str(fac_sel.get("Descripcion", "")).upper() or
-                    "INLAND" in str(fac_sel.get("Descripcion", "")).upper() or
-                    "FLETE" in str(fac_sel.get("Descripcion", "")).upper() or
-                    "70787" in str(fac_sel.get("Factura", "")) or
-                    str(fac_sel.get("Cta ReteFuente", "")).strip() == "23652505" or
-                    (rfte_val > 0 and base_val > 0 and abs(rfte_val - round(base_val * 0.01, 2)) < 2.0))
-
-    cta_rf_raw = str(fac_sel.get("Cta ReteFuente", "")).strip()
-    cta_ri_raw = str(fac_sel.get("Cta ReteICA", "")).strip()
-
-    # Si es transporte o la retencion es del 1%, la cuenta legal ES 23652505
-    if es_transp_as or (rfte_val > 0 and base_val > 0 and abs(rfte_val - round(base_val * 0.01, 2)) < 2.0):
-        if rfte_val == round(base_val * 0.04, 2) or rfte_val == 0.0:
-            rfte_val = round(base_val * 0.01, 2)
-        if rica_val == round(base_val * 0.00966, 2) or rica_val == 0.0:
-            rica_val = round(base_val * 0.00414, 2)
-        cta_rf_usar = "23652505"
-        cta_ri_usar = "23680513"
-        cta_p = "14650501"
-    else:
-        cta_rf_usar = cta_rf_raw if (cta_rf_raw and cta_rf_raw not in ["nan", "None", ""]) else ("23652503" if es_aduanero else "23654001")
-        cta_ri_usar = cta_ri_raw if (cta_ri_raw and cta_ri_raw not in ["nan", "None", ""]) else ("23680505" if es_aduanero else "23680501")
-
-    if cta_p == "146505":
-        cta_p = "14650501"
-
-    tot_ret = round(rfte_val + rica_val, 2)
-
-    if asume_ret:
-        # IMPUESTOS ASUMIDOS (Cruza con Agente Aduanero / Triangulacion)
-        if tot_ret > 0:
-            asiento_filas.append({
-                "C\u00f3digo Cuenta": "53152001",
-                "Descripci\u00f3n de la Cuenta": "Retenciones Asumidas (Impuestos Asumidos Aduana)",
-                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-                "D\u00e9bito ($)": tot_ret,
-                "Cr\u00e9dito ($)": 0.0
-            })
-        if rfte_val > 0:
-            asiento_filas.append({
-                "C\u00f3digo Cuenta": cta_rf_usar,
-                "Descripci\u00f3n de la Cuenta": f"ReteFuente Practicada ({cta_rf_usar}) Fac {fac_sel.get('Factura', '')}",
-                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-                "D\u00e9bito ($)": 0.0,
-                "Cr\u00e9dito ($)": rfte_val
-            })
-        if rica_val > 0:
-            asiento_filas.append({
-                "C\u00f3digo Cuenta": cta_ri_usar,
-                "Descripci\u00f3n de la Cuenta": "Retenci\u00f3n ICA Practicada",
-                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-                "D\u00e9bito ($)": 0.0,
-                "Cr\u00e9dito ($)": rica_val
-            })
-        saldo_cxp = round(base_val + inc_otros_val + iva_val + iva_imp_val, 2)
-        asiento_filas.append({
-            "C\u00f3digo Cuenta": cta_cxp_usar,
-            "Descripci\u00f3n de la Cuenta": f"CxP Proveedor/Agente - Fac {fac_sel.get('Factura', '')}",
-            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-            "D\u00e9bito ($)": saldo_cxp if es_nc else 0.0,
-            "Cr\u00e9dito ($)": 0.0 if es_nc else saldo_cxp
-        })
-    else:
-        # RETENCIONES ORDINARIAS PRACTICADAS AL PROVEEDOR
-        if rfte_val > 0:
-            nom_rf_dsp = "Transporte Carga 1%" if cta_rf_usar == "23652505" else ("Servicios 4%" if cta_rf_usar == "23652503" else fac_sel.get('Categor\u00eda', 'Compras/Servicios'))
-            asiento_filas.append({
-                "C\u00f3digo Cuenta": cta_rf_usar,
-                "Descripci\u00f3n de la Cuenta": f"ReteFuente Practicada ({nom_rf_dsp}) Fac {fac_sel.get('Factura', '')}",
-                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-                "D\u00e9bito ($)": rfte_val if es_nc else 0.0,
-                "Cr\u00e9dito ($)": 0.0 if es_nc else rfte_val
-            })
-        if rica_val > 0:
-            nom_ri_dsp = "Transporte 4.14\u2030" if cta_ri_usar == "23680513" else ("Servicios 9.66\u2030" if cta_ri_usar == "23680505" else "Retenci\u00f3n ICA Practicada")
-            asiento_filas.append({
-                "C\u00f3digo Cuenta": cta_ri_usar,
-                "Descripci\u00f3n de la Cuenta": f"Retenci\u00f3n ICA Practicada ({nom_ri_dsp})",
-                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-                "D\u00e9bito ($)": rica_val if es_nc else 0.0,
-                "Cr\u00e9dito ($)": 0.0 if es_nc else rica_val
-            })
-        if riva_val > 0:
-            asiento_filas.append({
-                "C\u00f3digo Cuenta": "23670101",
-                "Descripci\u00f3n de la Cuenta": "Retenci\u00f3n de IVA Practicada (15%)",
-                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-                "D\u00e9bito ($)": riva_val if es_nc else 0.0,
-                "Cr\u00e9dito ($)": 0.0 if es_nc else riva_val
-            })
-        neto_cxp = round(base_val + inc_otros_val + iva_val + iva_imp_val - rfte_val - rica_val - riva_val, 2)
-        asiento_filas.append({
-            "C\u00f3digo Cuenta": cta_cxp_usar,
-            "Descripci\u00f3n de la Cuenta": f"Proveedores Nacionales - Fac {fac_sel.get('Factura', '')}",
-            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-            "D\u00e9bito ($)": neto_cxp if es_nc else 0.0,
-            "Cr\u00e9dito ($)": 0.0 if es_nc else neto_cxp
-        })
-
-    df_h2 = pd.DataFrame(asiento_filas)
-    if "Descripci\u00f3n de la Cuenta" in df_h2.columns and "Descripci\u00f3n Cuenta" not in df_h2.columns:
-        df_h2["Descripci\u00f3n Cuenta"] = df_h2["Descripci\u00f3n de la Cuenta"]
-    elif "Descripci\u00f3n Cuenta" in df_h2.columns and "Descripci\u00f3n de la Cuenta" not in df_h2.columns:
-        df_h2["Descripci\u00f3n de la Cuenta"] = df_h2["Descripci\u00f3n Cuenta"]
-    return df_h2
-
-
-def obtener_saldo_cruce_factura(tr):
-    """
-    Calcula de forma segura el Saldo de Cruce (Base + IVA) de una factura para la triangulaci\u00f3n,
-    garantizando que nunca retorne None ni NaN.
-    """
-    try:
-        tb = float(tr.get("Base", 0.0)) if pd.notna(tr.get("Base")) else (float(tr.get("Subtotal", 0.0)) if pd.notna(tr.get("Subtotal")) else 0.0)
-    except Exception:
-        tb = 0.0
-    try:
-        tiv = float(tr.get("IVA", 0.0)) if pd.notna(tr.get("IVA")) else 0.0
-    except Exception:
-        tiv = 0.0
-    try:
-        t_imp = float(tr.get("IVA Importaci\u00f3n", 0.0)) if pd.notna(tr.get("IVA Importaci\u00f3n")) else 0.0
-    except Exception:
-        t_imp = 0.0
-
-    val_neto = tr.get("Total Neto")
-    if val_neto is not None and pd.notna(val_neto) and str(val_neto).strip() not in ["", "nan", "None", "0", "0.0"]:
-        try:
-            f_neto = float(val_neto)
-            if f_neto > 0.0 and not pd.isna(f_neto):
-                return round(f_neto, 2)
-        except Exception:
-            pass
-
-    saldo_calc = round(tb + tiv + t_imp, 2)
-    if saldo_calc > 0.0:
-        return saldo_calc
-
-    try:
-        tot = float(tr.get("Total", 0.0)) if pd.notna(tr.get("Total")) else 0.0
-        if tot > 0.0 and not pd.isna(tot):
-            return round(tot, 2)
-    except Exception:
-        pass
-    return 0.0
-
-
-
-
-def calcular_concordancia_fecha(fecha_tercero, fecha_agente):
-    """
-    Calcula de forma din\u00e1mica la concordancia cronol\u00f3gica entre la factura del tercero y la del agente,
-    garantizando que nunca retorne None ni NaN.
-    """
-    if not fecha_tercero or not fecha_agente or pd.isna(fecha_tercero) or pd.isna(fecha_agente):
-        return "\u26aa Sin fecha"
-    dt_terc = pd.to_datetime(str(fecha_tercero), dayfirst=True, errors="coerce")
-    dt_ag = pd.to_datetime(str(fecha_agente), dayfirst=True, errors="coerce")
-    if pd.isna(dt_terc) or pd.isna(dt_ag):
-        return "\u26aa Sin fecha"
-    
-    diff_d = int((dt_terc - dt_ag).days)
-    if diff_d == 0:
-        return "\U0001f7e2 Mismo d\u00eda (0d)"
-    elif 0 < diff_d <= 15:
-        return f"\u27a1\ufe0f Poco despu\u00e9s (+{diff_d}d)"
-    elif -30 <= diff_d < 0:
-        return f"\u2b05\ufe0f Anterior ({abs(diff_d)}d antes)"
-    elif -60 <= diff_d < -30:
-        return f"\u2b05\ufe0f Anterior ({abs(diff_d)}d antes)"
-    elif diff_d < -60:
-        return f"\u26d4 Fuera de rango ({abs(diff_d)}d antes)"
-    else:
-        return f"\u26d4 Fuera de rango (+{diff_d}d desp)"
-
-
-def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_no_deducible=False, imputar_a_transito=False):
-    """
-    Construye el asiento contable para un cobro de agente cuando se trae la contabilizaci\u00f3n de P\u00e1gina 2:
-    1. Si en Hoja 2 se registraron \u00fanicamente los Ingresos Propios (Base + IVA < Total Factura):
-       Combina los Ingresos Propios (con su IVA y retenciones) + Facturas de Terceros vinculadas (cancelaci\u00f3n de CxP) +
-       Cr\u00e9dito total al Agente Aduanero (22050501).
-    2. El saldo de ingresos para terceros NO se imputa autom\u00e1ticamente a ninguna cuenta de gasto ni tr\u00e1nsito.
-       Se deja PENDIENTE para que el usuario concilie con facturas de terceros o decida expl\u00edcitamente enviarlo a No Deducibles o a Tr\u00e1nsito.
-    3. Si el usuario selecciona 'No Deducibles', imputa el saldo a 53950501.
-    4. Si el usuario selecciona 'Mercanc\u00edas en Tr\u00e1nsito', imputa el saldo a 14650501.
-    """
-    df_h2 = obtener_asiento_contable_hoja2(agente_row, es_aduanero=False)
-    
-    tot_agente = float(agente_row.get("Total", 0.0))
-    base_propia = float(agente_row.get("Base", 0.0))
-    iva_propio = float(agente_row.get("IVA", 0.0))
-    iva_imp_propio = float(agente_row.get("IVA Importaci\u00f3n", 0.0))
-    subtotal_propio = round(base_propia + iva_propio + iva_imp_propio, 2)
-    saldo_terceros_esperado = round(tot_agente - subtotal_propio, 2)
-    
-    # Si la factura en Hoja 2 ya cubre el total y no hay terceros asignados
-    if saldo_terceros_esperado <= 0.05 and (terceros_df is None or terceros_df.empty):
-        return df_h2, 0.0
-        
-    filas_propias = []
-    tot_ret_propias = 0.0
-    for _, r in df_h2.iterrows():
-        cta = str(r["C\u00f3digo Cuenta"]).strip()
-        if cta.startswith("2365") or cta.startswith("2368") or cta.startswith("2367"):
-            tot_ret_propias += float(r["Cr\u00e9dito ($)"])
-            filas_propias.append(r.to_dict())
-        elif not (cta.startswith("2205") and float(r["Cr\u00e9dito ($)"]) > 0):
-            filas_propias.append(r.to_dict())
-            
-    # Facturas de terceros asignadas a este paquete
-    filas_terceros = []
-    suma_terceros_cxp = 0.0
-    if terceros_df is not None and not terceros_df.empty:
-        for _, t in terceros_df.iterrows():
-            prov_nom = str(t.get("Proveedor", "")).upper()
-            nit_t = str(t.get("NIT Emisor", ""))
-            fac_num = str(t.get("Factura", ""))
-            cta_cxp = str(t.get("Cuenta Pasivo Especifica", "")).strip() or ("22050505" if "CARGO" in prov_nom or "ADUANA" in prov_nom else "23359501")
-            t_base = float(t.get("Base", 0.0))
-            t_iva = float(t.get("IVA", 0.0))
-            t_saldo_pagar = obtener_saldo_cruce_factura(t)
-            
-            suma_terceros_cxp += t_saldo_pagar
-            filas_terceros.append({
-                "C\u00f3digo Cuenta": cta_cxp,
-                "Descripci\u00f3n Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
-                "Descripci\u00f3n de la Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
-                "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
-                "D\u00e9bito ($)": t_saldo_pagar,
-                "Cr\u00e9dito ($)": 0.0
-            })
-            
-    # Credito total por pagar al Agente Aduanero (Euro Shipping / Trade Global)
-    asume_ret = bool(agente_row.get("Impuestos Asumidos", False))
-    cxp_total_agente = tot_agente if asume_ret else round(tot_agente - tot_ret_propias, 2)
-    
-    filas_credito = [{
-        "C\u00f3digo Cuenta": CUENTA_CXP_EURO_SHIPPING,
-        "Descripci\u00f3n Cuenta": f"CxP Agente Aduanero - Fac {agente_row.get('Factura', '')}",
-        "Descripci\u00f3n de la Cuenta": f"CxP Agente Aduanero - Fac {agente_row.get('Factura', '')}",
-        "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
-        "D\u00e9bito ($)": 0.0,
-        "Cr\u00e9dito ($)": cxp_total_agente
-    }]
-    
-    # Calcular la diferencia matematica exacta de partida doble entre debitos y creditos del asiento
-    suma_deb_base = sum(float(f.get("D\u00e9bito ($)", 0.0) or 0.0) for f in (filas_propias + filas_terceros))
-    suma_cred_base = sum(float(f.get("Cr\u00e9dito ($)", 0.0) or 0.0) for f in (filas_propias + filas_credito))
-    dif_asiento_exacta = round(suma_cred_base - suma_deb_base, 2)
-
-    filas_ajuste = []
-    if abs(dif_asiento_exacta) > 0.05:
-        if enviar_a_no_deducible:
-            if dif_asiento_exacta > 0.05:
-                # Faltan debitos por justificar -> Debito a No Deducibles (53950501)
-                filas_ajuste.append({
-                    "C\u00f3digo Cuenta": CUENTA_NO_DEDUCIBLE,
-                    "Descripci\u00f3n Cuenta": f"Gastos No Deducibles Terceros (Diferencia sin soporte DIAN)",
-                    "Descripci\u00f3n de la Cuenta": f"Gastos No Deducibles Terceros (Diferencia sin soporte DIAN)",
-                    "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
-                    "D\u00e9bito ($)": dif_asiento_exacta,
-                    "Cr\u00e9dito ($)": 0.0
-                })
-            else:
-                # Debitos exceden creditos (los terceros superan el cobro del agente) -> Credito a 53950501
-                filas_ajuste.append({
-                    "C\u00f3digo Cuenta": CUENTA_NO_DEDUCIBLE,
-                    "Descripci\u00f3n Cuenta": f"Ajuste No Deducible / Terceros Superan Cobro Agente",
-                    "Descripci\u00f3n de la Cuenta": f"Ajuste No Deducible / Terceros Superan Cobro Agente",
-                    "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
-                    "D\u00e9bito ($)": 0.0,
-                    "Cr\u00e9dito ($)": abs(dif_asiento_exacta)
-                })
-        elif imputar_a_transito:
-            if dif_asiento_exacta > 0.05:
-                filas_ajuste.append({
-                    "C\u00f3digo Cuenta": CUENTA_IMPORTACION_TRANSITO,
-                    "Descripci\u00f3n Cuenta": f"Mercanc\u00edas en Tr\u00e1nsito / Saldo Faltante (Fac {agente_row.get('Factura', '')})",
-                    "Descripci\u00f3n de la Cuenta": f"Mercanc\u00edas en Tr\u00e1nsito / Saldo Faltante (Fac {agente_row.get('Factura', '')})",
-                    "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
-                    "D\u00e9bito ($)": dif_asiento_exacta,
-                    "Cr\u00e9dito ($)": 0.0
-                })
-            else:
-                filas_ajuste.append({
-                    "C\u00f3digo Cuenta": CUENTA_IMPORTACION_TRANSITO,
-                    "Descripci\u00f3n Cuenta": f"Ajuste Mercanc\u00edas en Tr\u00e1nsito / Terceros Superan Cobro (Fac {agente_row.get('Factura', '')})",
-                    "Descripci\u00f3n de la Cuenta": f"Ajuste Mercanc\u00edas en Tr\u00e1nsito / Terceros Superan Cobro (Fac {agente_row.get('Factura', '')})",
-                    "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
-                    "D\u00e9bito ($)": 0.0,
-                    "Cr\u00e9dito ($)": abs(dif_asiento_exacta)
-                })
-            
-    asiento_final = filas_propias + filas_terceros + filas_ajuste + filas_credito
-    df_res = pd.DataFrame(asiento_final)
-    dif_pendiente = abs(dif_asiento_exacta) if (not enviar_a_no_deducible and not imputar_a_transito) else 0.0
-    return df_res, dif_pendiente
-
-def generar_asiento_triangulacion_paquete(agente_row, terceros_df, enviar_a_no_deducible=False, enviar_a_gastos_propios=False, enviar_a_hoja2=False, **kwargs):
-    """
-    Calcula el asiento contable de partida doble para un paquete de importaci\u00f3n triangulado:
-    1. D\u00e9bito a CxP Terceros (22050505/23359501) por el Saldo por Pagar real (Base + IVA, ej. .651.939).
-       Si ya estaba registrada en Siigo, se cancela la cuenta por pagar imputada.
-    2. D\u00e9bito a Retenciones Asumidas (53152001) si las retenciones no se hab\u00edan asumido en la causaci\u00f3n previa.
-    3. D\u00e9bito a Importaci\u00f3n en Tr\u00e1nsito (14650501) e IVA (24081501) para facturas blancas pendientes.
-    4. D\u00e9bito a IVA de Importaci\u00f3n si la factura del agente lo discrimina.
-    5. D\u00e9bito a Gastos No Deducibles (53950501) por la diferencia sin factura DIAN.
-    6. Cr\u00e9dito a CxP Agente Aduanero (22050501) por el 100% de la factura del agente (ej. .077.647).
-    """
-    tot_agente = float(agente_row.get("Total", 0.0))
-    iva_agente = float(agente_row.get("IVA", 0.0))
-    
-    asiento = []
-    suma_cxp_canceladas = 0.0
-    suma_ret_asumidas = 0.0
-    suma_costo_blancas = 0.0
-    suma_iva_blancas = 0.0
-    
-    for _, t in terceros_df.iterrows():
-        prov_nom = str(t.get("Proveedor", "")).upper()
-        nit_t = str(t.get("NIT Emisor", ""))
-        fac_num = str(t.get("Factura", ""))
-        es_excluida_manual = bool(t.get("No Contabilizar", False)) or (str(t.get("Factura", "")).strip() in st.session_state.get("facturas_no_contabilizar", set()))
-        es_roja = bool(t.get("Ya Registrada", False)) or es_excluida_manual
-        cta_cxp = str(t.get("Cuenta Pasivo Especifica", "")).strip()
-        
-        if not cta_cxp:
-            if any(k in prov_nom for k in ["CARGO", "ADUANA", "PORTUARIA", "ALMACENADORA", "TERMINAL"]):
-                cta_cxp = CUENTA_CXP_AGENCIA_EXTERIOR
-            else:
-                cta_cxp = CUENTA_CXP_DHL_NACIONAL
-                
-        t_base = float(t.get("Base", 0.0))
-        t_iva = float(t.get("IVA", 0.0))
-        t_tot = float(t.get("Total", 0.0))
-        if t_base <= 0:
-            t_base = round(t_tot - t_iva, 2)
-            
-        rfte_t = float(t.get("ReteFuente", 0.0))
-        rica_t = float(t.get("ReteICA", 0.0))
-        tot_ret = round(rfte_t + rica_t, 2)
-        
-        # El Saldo por Pagar que entra a la triangulacion es Base + IVA (ej. .388.770 + 63.169 = .651.939)
-        t_saldo_pagar = obtener_saldo_cruce_factura(t)
-            
-        # REGLA DE TRIANGULACION: Toda factura de tercero traida a la triangulacion UNICAMENTE
-        # aporta su Cuenta por Pagar (pasivo: 22050505 Agencia, 23359501 DHL, etc.) por su Saldo por Pagar (Base + IVA),
-        # ya que la causacion del gasto/costo e IVA de esa factura se realiza en su propio comprobante individual.
-        asume_en_causacion = bool(t.get("Impuestos Asumidos", False))
-        
-        if asume_en_causacion or tot_ret == 0:
-            cxp_cancelar = t_saldo_pagar
-            ret_a_asumir = 0.0
-            suma_cxp_canceladas += cxp_cancelar
-            
-            asiento.append({
-                "C\u00f3digo Cuenta": cta_cxp,
-                "Descripci\u00f3n Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
-                "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
-                "D\u00e9bito ($)": cxp_cancelar,
-                "Cr\u00e9dito ($)": 0.0
-            })
-        else:
-            cxp_cancelar = round(t_saldo_pagar - tot_ret, 2)
-            ret_a_asumir = tot_ret
-            suma_cxp_canceladas += cxp_cancelar
-            suma_ret_asumidas += ret_a_asumir
-            
-            asiento.append({
-                "C\u00f3digo Cuenta": cta_cxp,
-                "Descripci\u00f3n Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
-                "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
-                "D\u00e9bito ($)": cxp_cancelar,
-                "Cr\u00e9dito ($)": 0.0
-            })
-            if ret_a_asumir > 0:
-                asiento.append({
-                    "C\u00f3digo Cuenta": CUENTA_RETENCION_ASUMIDA,
-                    "Descripci\u00f3n Cuenta": f"Retenci\u00f3n Asumida Fac {fac_num} ({prov_nom[:18]})",
-                    "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
-                    "D\u00e9bito ($)": ret_a_asumir,
-                    "Cr\u00e9dito ($)": 0.0
-                })
-
-    # IVA Servicios e IVA de Importacion del Agente
-    iva_imp_agente = float(agente_row.get("IVA Importaci\u00f3n", 0.0))
-    cta_iva_ag = str(agente_row.get("Cta IVA") or "24081501").strip()
-    cta_iva_imp_ag = str(agente_row.get("Cta IVA Importaci\u00f3n") or "240835").strip()
-
-    if iva_agente > 0:
-        asiento.append({
-            "C\u00f3digo Cuenta": cta_iva_ag,
-            "Descripci\u00f3n Cuenta": f"IVA Descontable Servicios Fac {agente_row.get('Factura', '')}",
-            "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
-            "D\u00e9bito ($)": iva_agente,
-            "Cr\u00e9dito ($)": 0.0
-        })
-
-    if iva_imp_agente > 0:
-        asiento.append({
-            "C\u00f3digo Cuenta": cta_iva_imp_ag,
-            "Descripci\u00f3n Cuenta": f"IVA de Importaci\u00f3n (Cta 240835) Fac {agente_row.get('Factura', '')}",
-            "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
-            "D\u00e9bito ($)": iva_imp_agente,
-            "Cr\u00e9dito ($)": 0.0
-        })
-
-    # Calcular la diferencia no deducible sin factura DIAN (Cuenta 53950501)
-    suma_justificada = suma_cxp_canceladas + suma_ret_asumidas + suma_costo_blancas + suma_iva_blancas + iva_agente + iva_imp_agente
-    diferencia_no_deducible = round(tot_agente - suma_justificada, 2)
-    
-    if diferencia_no_deducible > 0.01 and enviar_a_no_deducible:
-        asiento.append({
-            "C\u00f3digo Cuenta": CUENTA_NO_DEDUCIBLE,
-            "Descripci\u00f3n Cuenta": f"Gastos No Deducibles Importaci\u00f3n (Diferencia sin soporte DIAN)",
-            "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
-            "D\u00e9bito ($)": diferencia_no_deducible,
-            "Cr\u00e9dito ($)": 0.0
-        })
-    elif diferencia_no_deducible < -0.01:
-        # En caso de que la suma de terceros exceda ligeramente al agente por redondeo
-        asiento.append({
-            "C\u00f3digo Cuenta": CUENTA_NO_DEDUCIBLE,
-            "Descripci\u00f3n Cuenta": f"Ajuste por Diferencia de Cuadre Importaci\u00f3n",
-            "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
-            "D\u00e9bito ($)": 0.0,
-            "Cr\u00e9dito ($)": abs(diferencia_no_deducible)
-        })
-
-    # Credito total al Agente Aduanero (Euro Shipping / Trade Global) por el 100% de su factura
-    asiento.append({
-        "C\u00f3digo Cuenta": CUENTA_CXP_EURO_SHIPPING,
-        "Descripci\u00f3n Cuenta": f"CxP Agente Aduanero - Fac {agente_row.get('Factura', '')}",
-        "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
-        "D\u00e9bito ($)": 0.0,
-        "Cr\u00e9dito ($)": tot_agente
-    })
-
-    df_asiento = pd.DataFrame(asiento)
-    if "Descripci\u00f3n Cuenta" in df_asiento.columns and "Descripci\u00f3n de la Cuenta" not in df_asiento.columns:
-        df_asiento["Descripci\u00f3n de la Cuenta"] = df_asiento["Descripci\u00f3n Cuenta"]
-    elif "Descripci\u00f3n de la Cuenta" in df_asiento.columns and "Descripci\u00f3n Cuenta" not in df_asiento.columns:
-        df_asiento["Descripci\u00f3n Cuenta"] = df_asiento["Descripci\u00f3n de la Cuenta"]
-    return df_asiento, max(0.0, diferencia_no_deducible), suma_ret_asumidas
-
-# Directorio oficial de regimenes fiscales conocidos por NIT y Nombre
-REGIMENES_EMISORES_CONOCIDOS = {
-    '860502609': 'O-13;O-15',   # DHL EXPRESS COLOMBIA LTDA (Gran Contribuyente y Autorretenedor)
-    '800215775': 'O-13;O-15',   # SOCIEDAD PORTUARIA REGIONAL DE BUENAVENTURA S.A.
-    '890304099': 'O-13;O-15',   # HOTELES ESTELAR S.A.
-    '830048145': 'O-13;O-15',   # SIIGO S.A.S.
-    '830048268': 'O-48',        # EURO SHIPPING SERVICES S.A.S (Responsable de IVA / Codigo 23 - 48)
-    '800153993': 'O-13;O-15',   # COMUNICACION CELULAR S.A. COMCEL / CLARO
-    '860006376': 'O-13;O-15',   # PANAMERICANA LIBRERIA Y PAPELERIA S.A.
-    '890900608': 'O-13;O-15',   # BANCOLOMBIA S.A.
-    '860007738': 'O-13;O-15',   # BANCO DAVIVIENDA S.A.
-    '890903938': 'O-13;O-15',   # ALMACENES EXITO S.A.
-    '860012936': 'O-13;O-15',   # SODIMAC CORONA / HOMECENTER
-    '901306979': 'O-48',        # TRADE GLOBAL INTERNATIONAL SAS
-    '805001149': 'O-48',        # AGENCIA INTERAMERICANA DE CARGA
-    '900744197': 'O-48',        # HOTEL GENOVA SAS
-}
-
-CODIGOS_IMPUESTO_SIIGO = {
-    '24081001': 1,   # IVA 19% compras bienes
-    '24081003': 2,   # IVA 5% compras bienes
-    '24081501': 1,   # IVA Servicios 19%
-    '240835': 1,     # IVA de Importacion 19%
-    '24083501': 1,   # IVA de Importacion 19% (8 digitos)
-    '24080601': 1,   # IVA 19% ventas
-    '24080602': 2,   # IVA 5% ventas
-    '23651501': 3,   # Retefuente 11%
-    '23652001': 4,   # Retefuente 10%
-    '23652501': 5,   # Retefuente 6%
-    '23652503': 6,   # Retefuente 4% (Servicios / Agenciamiento)
-    '23654001': 7,   # Retefuente 2.5% (Compras generales / Repuestos)
-    '23654004': 18,  # Retefuente 3.5% (Alojamiento / Hoteles)
-    '23653502': 19,  # Retefuente 7%
-    '23657001': 20,  # Retefuente 2%
-    '23652505': 21,  # Retefuente 1%
-    '23654006': 23,  # Retefuente Combustibles 0.1%
-    '23680501': 8,   # ReteICA 11.04
-    '23680503': 9,   # ReteICA 13.8
-    '23680505': 10,  # ReteICA 9.66
-    '23680507': 11,  # ReteICA 8
-    '23680509': 12,  # ReteICA 7
-    '23680511': 13,  # ReteICA 6.9
-    '23680513': 14,  # ReteICA 4.14
-    '23670101': 15,  # ReteIVA 15%
-    '24950103': 16   # Impoconsumo 8%
-}
-
-AGENTES_ADUANEROS = ["DHL", "ADUANA", "EURO SHIPPING", "PORTUARIA", "ALMACENADORA", "CARGO", "TRADE GLOBAL", "TERMINAL", "BUENAVENTURA"]
-
-def escanear_regimen_texto_pdf(texto, nit_emisor=None):
-    """
-    Escaneo inteligente de responsabilidades fiscales del EMISOR en la factura electr\u00f3nica:
-    Analiza el documento completo sin truncar en 'Cliente:' para no perder las resoluciones.
-    Detecta O-13 (Gran Contribuyente), O-15 (Autorretenedor), O-47 (RST), O-48 y O-49.
-    """
-    if not texto:
-        return ""
-
-    txt = texto.upper()
-    txt_norm = re.sub(r'\s+', ' ', txt)
-
-    # 1. Si se conoce el NIT del emisor, verificar en el directorio de regimenes oficiales
-    if nit_emisor:
-        ne_clean = re.sub(r'\D', '', str(nit_emisor))
-        if ne_clean in REGIMENES_EMISORES_CONOCIDOS:
-            return REGIMENES_EMISORES_CONOCIDOS[ne_clean]
-
-    # 1.1 Si el texto corresponde a Euro Shipping Services, es O-48 (Responsable de IVA / Comun)
-    if "EURO SHIPPING" in txt_norm or "830048268" in txt_norm:
-        return "O-48"
-
-    # 2. Analizar Gran Contribuyente (O-13 / 0-13 / Grandes Contribuyentes)
-    es_gc = False
-    if re.search(r'\b[O0]-13\b', txt_norm):
-        if not re.search(r'(?:NO\s+(?:SOMOS\s+)?|NI\s+|NO\s+ES\s+)[O0]-13', txt_norm):
-            es_gc = True
-    elif re.search(r'GRANDES?\s+CONTRIBUYENTES?', txt_norm):
-        if not re.search(r'(?:NO\s+(?:SOMOS\s+)?|NI\s+|NO\s+ES\s+)GRANDES?\s+CONTRIBUYENTES?', txt_norm):
-            es_gc = True
-
-    # 3. Analizar Autorretenedor (O-15 / 0-15 / Autorretenedor de Renta)
-    es_autorr = False
-    if re.search(r'\b[O0]-15\b', txt_norm):
-        if not re.search(r'(?:NO\s+(?:SOMOS\s+)?|NI\s+|NO\s+ES\s+)[O0]-15', txt_norm):
-            es_autorr = True
-    elif re.search(r'AUTO[R]?RETENEDOR(?:ES)?', txt_norm):
-        if not re.search(r'(?:NO\s+(?:SOMOS\s+)?|NI\s+|NO\s+ES\s+)AUTO[R]?RETENEDOR(?:ES)?', txt_norm):
-            es_autorr = True
-
-    # 4. Analizar Regimen Simple de Tributacion (O-47 / 0-47 / RST)
-    es_rst = False
-    if re.search(r'\b[O0]-47\b', txt_norm):
-        es_rst = True
-    elif re.search('R[E\u00c9]GIMEN\\s+SIMPLE|SIMPLE\\s+DE\\s+TRIBUTACI[O\u00d3]N|\\bRST\\b', txt_norm):
-        if not re.search('(?:NO\\s+(?:SOMOS\\s+)?|NI\\s+)(?:R[E\u00c9]GIMEN\\s+SIMPLE|RST)', txt_norm):
-            es_rst = True
-
-    # 5. No Responsable de IVA (O-49 / 0-49)
-    es_no_iva = False
-    if re.search(r'\b[O0]-49\b', txt_norm) or re.search(r'NO\s+RESPONSABLE\s+(?:DE|DEL)\s+IVA', txt_norm):
-        es_no_iva = True
-
-    codigos = []
-    if es_gc: codigos.append("O-13")
-    if es_autorr: codigos.append("O-15")
-    if es_rst: codigos.append("O-47")
-    if es_no_iva: codigos.append("O-49")
-    if not codigos: codigos.append("O-48")
-
-    return ";".join(codigos)
-
-def parse_num_co(val_str):
-    if not val_str: return 0.0
-    s = str(val_str).replace('$', '').replace('COP', '').strip()
-    if ',' in s and '.' in s:
-        if s.rfind(',') > s.rfind('.'):
-            s = s.replace('.', '').replace(',', '.')
-        else:
-            s = s.replace(',', '')
-    elif ',' in s:
-        parts = s.split(',')
-        if len(parts) == 2 and len(parts[1]) in [2, 3]:
-            s = parts[0].replace('.', '') + '.' + parts[1]
-        else:
-            s = s.replace(',', '')
-    try:
-        return float(s)
-    except:
-        return 0.0
-
-def extraer_valores_fiscales_texto_pdf(texto):
-    """
-    Extrae con m\u00e1xima precisi\u00f3n los valores fiscales y totales desde el texto del PDF oficial:
-    1. Subtotal / Total Bruto Factura (Base gravable antes de descuentos o retenciones en notas).
-    2. IVA discriminado o Total Impuesto.
-    3. Total Neto Factura (Base + IVA, antes de retenciones sugeridas).
-    4. Retenciones en notas / Descuentos Globales (ReteFuente 11%/4%, ReteICA 0.966%, ReteIVA).
-    5. Anticipos reales reportados en notas o casillas informativas.
-    6. Identificaci\u00f3n de facturaci\u00f3n a favor del agente aduanero (Mandato).
-    """
-    datos = {}
-    if not texto: return datos
-
-    # 1. Notas Finales (formato clave: valor)
-    m_nf_rfte = re.search(r'\bretefuente\s*:\s*([0-9\.\,]+)', texto, re.IGNORECASE)
-    if m_nf_rfte: datos['retefuente'] = parse_num_co(m_nf_rfte.group(1))
-
-    m_nf_rica = re.search(r'\breteica\s*:\s*([0-9\.\,]+)', texto, re.IGNORECASE)
-    if m_nf_rica: datos['reteica'] = parse_num_co(m_nf_rica.group(1))
-
-    m_nf_riva = re.search(r'\breteiva\s*:\s*([0-9\.\,]+)', texto, re.IGNORECASE)
-    if m_nf_riva: datos['reteiva'] = parse_num_co(m_nf_riva.group(1))
-
-    # 2. Descuentos globales por retencion sugerida si no vino en notas
-    if 'retefuente' not in datos or datos['retefuente'] == 0:
-        m_dg_rf = re.search(r'RETEFUENTE[^\$]+(?:[\$]\s*|COP\s*)([0-9\.\,]+)', texto, re.IGNORECASE)
-        if m_dg_rf: datos['retefuente'] = parse_num_co(m_dg_rf.group(1))
-
-    if 'reteica' not in datos or datos['reteica'] == 0:
-        m_dg_ri = re.search(r'RETEICA[^\$]+(?:[\$]\s*|COP\s*)([0-9\.\,]+)', texto, re.IGNORECASE)
-        if m_dg_ri: datos['reteica'] = parse_num_co(m_dg_ri.group(1))
-
-    # 3. Desglose de impuestos por tarifa en items (IVA 19%, IVA 5%, INC 8%) y Bloque de Datos Totales
-    lines_pdf = [l.strip() for l in texto.splitlines() if l.strip()]
-    iva_19_items = 0.0
-    iva_5_items = 0.0
-    inc_8_items = 0.0
-    for idx_l in range(1, len(lines_pdf)):
-        cur_l = lines_pdf[idx_l]
-        prev_l = lines_pdf[idx_l - 1]
-        if cur_l in ["19.00", "19,00"]:
-            v_l = parse_num_co(prev_l)
-            if (',' in prev_l or '.' in prev_l) and v_l >= 0 and prev_l not in ["19.00", "19,00", "5.00", "5,00", "8.00", "8,00"]:
-                iva_19_items += v_l
-        elif cur_l in ["5.00", "5,00"]:
-            v_l = parse_num_co(prev_l)
-            if (',' in prev_l or '.' in prev_l) and v_l >= 0 and prev_l not in ["19.00", "19,00", "5.00", "5,00", "8.00", "8,00"]:
-                iva_5_items += v_l
-        elif cur_l in ["8.00", "8,00"]:
-            v_l = parse_num_co(prev_l)
-            if (',' in prev_l or '.' in prev_l) and v_l >= 0 and prev_l not in ["19.00", "19,00", "5.00", "5,00", "8.00", "8,00"]:
-                inc_8_items += v_l
-
-    matches_moneda = [m.start() for m in re.finditer(r'MONEDA\s+COP', texto, re.IGNORECASE)]
-    if matches_moneda:
-        txt_totales = texto[matches_moneda[-1]:]
-    else:
-        pos_totales = texto.upper().rfind('DATOS TOTALES')
-        txt_totales = texto[pos_totales:] if pos_totales != -1 else texto
-
-    def _ext_lbl(lbl_rx, blk):
-        m = re.search(lbl_rx + r'\s*[\r\n\s:\$]*(?:COP\s*)?(?:\$\s*)?([0-9]{1,3}(?:[\.\,][0-9]{3})*(?:[\.\,][0-9]{2,4})?)', blk, re.IGNORECASE)
-        return parse_num_co(m.group(1)) if m else 0.0
-
-    sub_raw = _ext_lbl(r'Subtotal', txt_totales)
-    desc_det_raw = _ext_lbl(r'Descuento\s+detalle', txt_totales)
-    tot_bruto_raw = _ext_lbl(r'Total\s+Bruto\s+Factura', txt_totales)
-    iva_tot_raw = _ext_lbl(r'\bIVA\b', txt_totales)
-    inc_raw = _ext_lbl(r'\bINC\b', txt_totales)
-    bolsas_raw = _ext_lbl(r'\bBolsas\b', txt_totales)
-    otros_imp_raw = _ext_lbl(r'Otros\s+impuestos', txt_totales)
-    recargo_glob_raw = _ext_lbl(r'Recargo\s+Global\s*(?:\(\+\))?', txt_totales)
-    tot_neto_raw = _ext_lbl(r'Total\s+neto\s+factura\s*(?:\(\=\))?', txt_totales)
-    tot_fac_raw = _ext_lbl(r'Total\s+factura\s*(?:\(\=\))?', txt_totales)
-
-    # Usar Total Bruto Factura cuando hay Descuento en detalle de items
-    if tot_bruto_raw > 0:
-        datos['subtotal'] = round(tot_bruto_raw + (recargo_glob_raw if iva_tot_raw == 0 else 0.0), 2)
-    elif sub_raw > 0:
-        datos['subtotal'] = round(sub_raw - desc_det_raw, 2)
-
-    if iva_tot_raw > 0:
-        datos['iva'] = round(iva_tot_raw, 2)
-    elif (iva_19_items + iva_5_items) > 0:
-        datos['iva'] = round(iva_19_items + iva_5_items, 2)
-
-    if iva_5_items > 0:
-        datos['iva_5'] = round(iva_5_items, 2)
-        datos['base_iva_5'] = round(iva_5_items / 0.05, 2)
-        datos['iva_19'] = round(max(0.0, datos.get('iva', 0.0) - datos['iva_5']), 2)
-        datos['base_iva_19'] = round(datos['iva_19'] / 0.19, 2) if datos['iva_19'] > 0 else 0.0
-    else:
-        datos['iva_5'] = 0.0
-        datos['base_iva_5'] = 0.0
-        datos['iva_19'] = round(datos.get('iva', 0.0), 2)
-        datos['base_iva_19'] = round(datos['iva_19'] / 0.19, 2) if datos['iva_19'] > 0 else 0.0
-
-    datos['inc_otros'] = round(inc_raw + bolsas_raw + otros_imp_raw, 2)
-    if tot_neto_raw > 0:
-        datos['total_neto'] = tot_neto_raw
-    if tot_fac_raw > 0:
-        datos['total_factura'] = tot_fac_raw
-
-    m_fact_a = re.search(r'nombre_facturado_a\s*:\s*([^\n\r]+)', texto, re.IGNORECASE)
-    if m_fact_a: datos['nombre_facturado_a'] = m_fact_a.group(1).strip()
-
-    m_nit_fact_a = re.search(r'nit_facturado_a\s*:\s*([0-9]+)', texto, re.IGNORECASE)
-    if m_nit_fact_a: datos['nit_facturado_a'] = m_nit_fact_a.group(1).strip()
-
-    # 4. Extraccion de conceptos y descripcion de items / productos (ej. Transporte Terrestre)
-    REGEX_TRANSPORTE = r'\b(TRANSPORTE|TRANSPORT|INLAND\s*RATE|FLETE|FLETES|ACARREO|ACARREOS|CARGA\s*TERRESTRE|TERRESTRE|DRAYAGE|PORTES|FLETAMENTO)\b'
-    m_transp = re.search(REGEX_TRANSPORTE, texto, re.IGNORECASE)
-    if m_transp:
-        datos['es_transporte'] = True
-        datos['concepto_items'] = "INLAND RATE TRANSPORTE TERRESTRE"
-
-    m_det = re.search(r'Detalles\s+de\s+Productos(.*?)(?:Notas\s+Finales|DATOS\s+TOTALES|Totales|\Z)', texto, re.DOTALL | re.IGNORECASE)
-    if m_det:
-        for lin in m_det.group(1).splitlines():
-            lin_s = lin.strip()
-            if lin_s and not any(h in lin_s.upper() for h in ["C\u00d3DIGO", "CODIGO", "DESCRIPCI\u00d3N", "DESCRIPCION", "CANTIDAD", "PRECIO", "DESCUENTO", "RECARGO", "IMPUESTOS", "U/M", "VENTA", "UNITARIO"]):
-                lin_clean = re.sub(r'^\d+\s+', '', lin_s).strip()
-                if len(lin_clean) >= 4 and not re.match(r'^[\d\.\,\$\s\%\-]+$', lin_clean):
-                    datos['concepto_items'] = lin_clean
-                    if re.search(REGEX_TRANSPORTE, lin_clean, re.IGNORECASE):
-                        datos['es_transporte'] = True
-                    break
-
-    return datos
-
-def calcular_base_con_regla_descuento(r, tot, iva, nom_emisor):
-    """
-    Calcula la Base Gravable contable respetando la regla estricta:
-    1. Conversi\u00f3n de moneda extranjera (USD a COP por TRM): Si el Subtotal/IVA vienen en USD y Total en COP,
-       convierte ambos valores a COP con la TRM impl\u00edcita para garantizar partida doble exacta.
-    2. El descuento SOLO se aplica si est\u00e1 incorporado en los \u00cdTEMS de la factura.
-    3. Si el descuento aparece en las NOTAS u observaciones, NO VA (no disminuye la base gravable).
-    4. En agencias aduaneras (DHL, Euro Shipping, etc.), las casillas o notas de descuento corresponden
-       a retenciones practicadas que no deben restarse de la base para evitar duplicidades.
-    5. Si en el reporte/factura existe la columna de Subtotal (valor de los \u00edtems antes de notas),
-       se toma directamente el Subtotal como base contable.
-    """
-    nom = str(nom_emisor).upper()
-    es_aduanero = any(k in nom for k in AGENTES_ADUANEROS)
-
-    col_sub = next((c for c in r.index if any(k in str(c).lower() for k in ["subtotal", "sub total", "base gravable", "base_gravable", "valor subtotal", "lineextensionamount"])), None)
-    col_desc_item = next((c for c in r.index if any(k in str(c).lower() for k in ["descuento_items", "descuento item", "descuento \u00edtems", "descuento linea", "descuento comercial"])), None)
-    col_desc_gen = next((c for c in r.index if any(k in str(c).lower() for k in ["descuento", "descuentos", "total descuento", "valor descuento", "allowancetotalamount"])), None)
-
-    subtotal_val = None
-    if col_sub and pd.notna(r.get(col_sub)):
-        try:
-            v = float(r.get(col_sub))
-            if v > 0:
-                subtotal_val = v
-        except Exception:
-            pass
-
-    desc_val = 0.0
-    if col_desc_gen and pd.notna(r.get(col_desc_gen)):
-        try:
-            desc_val = float(r.get(col_desc_gen))
-        except Exception:
-            desc_val = 0.0
-
-    desc_item_val = 0.0
-    if col_desc_item and pd.notna(r.get(col_desc_item)):
-        try:
-            desc_item_val = float(r.get(col_desc_item))
-        except Exception:
-            desc_item_val = 0.0
-
-    # DETECCION Y CONVERSION DE MONEDA EXTRANJERA (USD a COP por TRM):
-    # Si el Total en DIAN esta en COP (ej. > 50,000 COP) pero Subtotal e IVA vienen en USD (ej. 780 USD y 16.15 USD),
-    # la relacion Total / (Subtotal + IVA) esta en el rango historico de TRM (1,500 a 6,500).
-    if subtotal_val is not None and tot > 1000 and (subtotal_val + iva) > 0:
-        ratio_trm = tot / (subtotal_val + iva)
-        if 1500 <= ratio_trm <= 6500:
-            subtotal_val = round(subtotal_val * ratio_trm, 2)
-            iva = round(iva * ratio_trm, 2)
-            desc_val = round(desc_val * ratio_trm, 2)
-            desc_item_val = round(desc_item_val * ratio_trm, 2)
-            base = round(subtotal_val, 2)
-            motivo_base = f"Factura en USD convertida a TRM () \u2014 Base COP:  | IVA COP: "
-            return base, iva, desc_val, motivo_base
-
-    # REGLA:
-    # Si viene el Subtotal de los items, esa es la base real. Los descuentos en notas NO se restan.
-    if subtotal_val is not None:
-        base = round(subtotal_val, 2)
-        motivo_base = f"Base = Subtotal de \u00cdtems () \u2014 Descuentos en notas no aplican"
-    else:
-        # Si no hay columna de subtotal y es agencia aduanera con descuento reportado (retenciones en notas):
-        if es_aduanero and desc_val > 0:
-            base = round(tot - iva + desc_val, 2)
-            motivo_base = f"Agencia Aduanera: Base restituida () sin descontar retenciones de notas"
-        elif desc_item_val > 0:
-            base = round(tot - iva, 2)
-            motivo_base = f"Base calculada con descuento comercial en \u00edtems ()"
-        else:
-            base = round(tot - iva, 2)
-            motivo_base = f"Base est\u00e1ndar = Total - IVA ()"
-
-    # Validacion de consistencia: si Base + IVA difiere del Total por mas de .0 y no hay descuentos justificados
-    if tot > 0 and abs((base + iva) - tot) > 1.0 and desc_val == 0 and not (es_aduanero and desc_val > 0):
-        base = round(tot - iva, 2)
-        motivo_base = f"Base ajustada = Total - IVA ()"
-
-    return base, iva, desc_val, motivo_base
-
-
-# ==============================================================================
-# MOTOR DE MEMORIA Y APRENDIZAJE CONTINUO DE REGLAS CONTABLES
-# ==============================================================================
-PATH_MEMORIA_GLOBAL = "almacenamiento_contable/memoria_aprendizaje_contable.json"
-
-def cargar_memoria_aprendizaje(empresa_dict=None):
-    """Carga el banco hist\u00f3rico de aprendizaje con reglas auditadas por el usuario."""
-    nit_empresa = re.sub(r'\D', '', str(empresa_dict.get("nit", ""))) if empresa_dict else "global"
-    path_esp = f"almacenamiento_contable/{nit_empresa}/memoria_aprendizaje_contable.json"
-
-    for p in [path_esp, PATH_MEMORIA_GLOBAL]:
-        if os.path.exists(p):
+            index_data.append(meta)
+            index_data.sort(key=lambda x: x.get("id", ""), reverse=True)
             try:
-                with open(p, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-    return {}
-
-def guardar_regla_aprendizaje(empresa_dict, nit_emisor, nombre_emisor, cta_p=None, resp_fiscal=None, **kwargs):
-    """Memoriza una correcci\u00f3n o auditor\u00eda del usuario para aplicarla autom\u00e1ticamente en meses futuros."""
-    if not nit_emisor:
-        return
-    nit_clean = re.sub(r'\D', '', str(nit_emisor))
-    if not nit_clean:
-        return
-
-    memoria = cargar_memoria_aprendizaje(empresa_dict)
-    regla = memoria.get(nit_clean, {
-        "proveedor": nombre_emisor,
-        "nit": nit_clean,
-        "veces_auditado": 0
-    })
-    if nombre_emisor:
-        regla["proveedor"] = nombre_emisor
-    if cta_p:
-        regla["cta_principal"] = str(cta_p).strip()
-    if resp_fiscal:
-        regla["regimen"] = str(resp_fiscal).strip()
-    for k, v in kwargs.items():
-        if v is not None:
-            regla[k] = v
-    regla["veces_auditado"] = regla.get("veces_auditado", 0) + 1
-    regla["ultima_actualizacion"] = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
-
-    memoria[nit_clean] = regla
-
-    nit_empresa = re.sub(r'\D', '', str(empresa_dict.get("nit", ""))) if empresa_dict else "global"
-    dir_esp = f"almacenamiento_contable/{nit_empresa}"
-    os.makedirs(dir_esp, exist_ok=True)
-    os.makedirs("almacenamiento_contable", exist_ok=True)
-
-    try:
-        with open(f"{dir_esp}/memoria_aprendizaje_contable.json", "w", encoding="utf-8") as f:
-            json.dump(memoria, f, ensure_ascii=False, indent=2)
-        with open(PATH_MEMORIA_GLOBAL, "w", encoding="utf-8") as f:
-            json.dump(memoria, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-    return memoria
-
-def clasificar_factura(nit_emisor, nombre_emisor, valor_base, valor_iva, tipo_doc, resp_emisor="", empresa_compradora=None, descripcion=""):
-    nombre_str = "" if (nombre_emisor is None or pd.isna(nombre_emisor)) else str(nombre_emisor).strip()
-    if nombre_str.lower() in ["nan", "none"]:
-        nombre_str = ""
-    nombre = nombre_str.upper()
-    nombre_emisor = nombre_str or "Proveedor"
-    resp = str(resp_emisor).upper()
-    desc_u = str(descripcion or "").upper()
-
-    # Deteccion explicita de concepto TRANSPORTE DE CARGA / FLETES / INLAND
-    REGEX_TRANSPORTE = r'\b(TRANSPORTE|TRANSPORT|INLAND|FLETE|FLETES|ACARREO|ACARREOS|CARGA\s*TERRESTRE|TERRESTRE|DRAYAGE|PORTES)\b'
-    es_transporte = bool(re.search(REGEX_TRANSPORTE, desc_u) or (any(k in nombre for k in ["TRANSPORTE", "TRANSPORT", "CARGA", "FLETE"]) and not any(k in nombre for k in ["AGENCIA", "ADUANA"])))
-
-    # 0. MEMORIA DE APRENDIZAJE: Si el usuario ya audito y guardo reglas para este proveedor previamente
-    cta_aprendida = None
-    memoria_ap = cargar_memoria_aprendizaje(empresa_compradora)
-    nit_clean_c = re.sub(r'\D', '', str(nit_emisor))
-    if nit_clean_c in memoria_ap:
-        r_ap = memoria_ap[nit_clean_c]
-        if not resp_emisor and r_ap.get("regimen"):
-            resp_emisor = r_ap["regimen"]
-            resp = resp_emisor.upper()
-        if r_ap.get("cta_principal"):
-            cta_aprendida = r_ap["cta_principal"]
-        if r_ap.get("cta_iva"):
-            cta_iva = r_ap["cta_iva"]
-    if empresa_compradora is None:
-        empresa_compradora = {"es_gran_contribuyente": False, "es_autorretenedor": False}
-
-    tipo_str = str(tipo_doc).upper()
-    if "CREDITO" in tipo_str or "CR\u00c9DITO" in tipo_str or "NC" in tipo_str or "DEVOLUCION" in tipo_str:
-        t_comp = 17
-        op = "Devolucion Compra"
-    elif "NOTA" in tipo_str or "AJUSTE" in tipo_str or "CONTABILIDAD" in tipo_str:
-        t_comp = 14
-        op = "Nota Contabilidad"
-    else:
-        t_comp = 10
-        op = "Compra"
-
-    # 1. TRANSPORTE TERRESTRE DE CARGA / FLETES / INLAND RATE (Prioridad sobre Agenciamiento)
-    if es_transporte or any(k in desc_u for k in ["INLAND", "TRANSPORTE", "TRANSPORT", "FLETE"]):
-        # Retencion en la fuente por Transporte de Carga: 1% (Art. 1.2.4.4.6 DUR 1625 / Art. 401 E.T.)
-        rfte_t = round(valor_base * 0.01, 2) if valor_base >= 188000 else 0.0
-        # ReteICA Transporte Bogota: 4.14 por mil (CIIU 4923 Transporte de Carga)
-        rica_t = round(valor_base * 0.00414, 2) if valor_base >= 188000 else 0.0
-        es_imp_transp = any(k in nombre for k in AGENTES_ADUANEROS) or any(k in nombre for k in ["EURO SHIPPING", "DHL", "TRADE GLOBAL", "CONSOLCARGO"])
-        cta_p = "14650501" if es_imp_transp else "51355001"
-        cta_c = "22050501"
-        desc = (descripcion[:35] if descripcion else f"Transporte Terrestre - {nombre_emisor[:20]}")
-        cta_rfte_b = "23652505"  # ReteFuente 1% Transporte Carga
-        cta_iva = "24081001" if valor_iva == 0 else "24081501"
-        cta_rica_b = "23680513"  # ReteICA 4.14 por mil Transporte
-        cat = "Transporte Carga (1%)"
-        razon_b = "Transporte Terrestre de Carga / Fletes (1% ReteFuente [23652505] - 4.14\u2030 ReteICA [23680513])"
-
-    # 1.B Agentes Aduaneros e Importaciones (Servicios / Agenciamiento ordinario)
-    elif any(k in nombre for k in AGENTES_ADUANEROS):
-        rfte_t = round(valor_base * 0.04, 2) if valor_base >= 210000 or "EURO SHIPPING" in nombre or "DHL" in nombre else 0.0
-        rica_t = round(valor_base * 0.00966, 2) if valor_base >= 210000 and "BUENAVENTURA" not in nombre and "PORTUARIA" not in nombre else 0.0
-        cta_p, cta_c, desc = "146505", "22050501", f"Importacion / Transito - {nombre_emisor[:25]}"
-        cta_rfte_b, cta_iva, cta_rica_b = "23652503", "240835", "23680505"
-        cat, razon_b = "Importacion (1465)", "Honorarios Agenciamiento vs Terceros"
-
-    # 2. Repuestos / Mantenimiento
-    elif any(k in nombre for k in ["FERROMENDEZ", "TORNILLOLOCO", "CAUCHOS", "ASIMFER", "MAFLEXCOL", "EMPRECOL", "BATTS ZONE", "MECANIZAR", "HIDRAHULICAS", "ELECTRICOS", "ILUMINACION", "BAMACOLGROUP"]):
-        rfte_t = round(valor_base * 0.025, 2) if valor_base >= 1047000 else 0.0
-        rica_t = round(valor_base * 0.01104, 2) if valor_base >= 1414000 else 0.0
-        cta_rfte_b, cta_iva, cta_rica_b = "23654001", "24081001", "23680501"
-        if valor_base >= 500000:
-            cta_p, cta_c, desc = "14350101", "22050501", f"Repuestos / Inventario - {nombre_emisor[:25]}"
-            cat, razon_b = "Inventario", "Compra repuestos mayores a 500k"
-        else:
-            cta_p, cta_c, desc = "61800101", "23359501", f"Mantenimiento menor - {nombre_emisor[:25]}"
-            cat, razon_b = "Costo Mantenimiento", "Repuestos menores a 500k"
-            rfte_t, rica_t = 0.0, 0.0
-
-    # 3. Hoteles / Viajes
-    elif any(k in nombre for k in ["HOTEL", "ESTELAR", "GENOVA", "VITTAPARK"]):
-        rfte_t = round(valor_base * 0.035, 2) if valor_base >= 210000 else 0.0
-        rica_t = round(valor_base * 0.00966, 2) if valor_base >= 210000 else 0.0
-        cta_p, cta_c, desc = "51550501", "23359501", f"Alojamiento / Viaje - {nombre_emisor[:25]}"
-        cta_rfte_b, cta_iva, cta_rica_b = "23652501", "24081501", "23680505"
-        cat, razon_b = "Gasto Viaje", "Hospedaje de personal (IVA Servicios 24081501)"
-
-    # 4. Software Siigo
-    elif "SIIGO" in nombre:
-        cta_p, cta_c, desc = "51352001", "23359501", f"Software Siigo - {nombre_emisor[:25]}"
-        rfte_t, rica_t = 0.0, 0.0
-        cta_rfte_b, cta_iva, cta_rica_b = "", "24081501", ""
-        cat, razon_b = "Software", "Software y tecnologia (IVA Servicios 24081501)"
-        cat, razon_b = "Software", "Software y tecnologia"
-
-    # 5. Papeleria
-    elif any(k in nombre for k in ["PANAMERICANA", "LIBRERIA"]):
-        cta_p, cta_c, desc = "51953001", "23359501", f"Papeleria - {nombre_emisor[:25]}"
-        rfte_t, rica_t = 0.0, 0.0
-        cta_rfte_b, cta_iva, cta_rica_b = "", "24081001", ""
-        cat, razon_b = "Gastos Papeleria", "Utiles de oficina"
-
-    # 6. Compras y Gastos Generales
-    elif valor_base >= 500000:
-        rfte_t = round(valor_base * 0.025, 2) if valor_base >= 1047000 else 0.0
-        rica_t = round(valor_base * 0.01104, 2) if valor_base >= 1414000 else 0.0
-        cta_p, cta_c, desc = "14350101", "22050501", f"Compra mercancias - {nombre_emisor[:25]}"
-        cta_rfte_b, cta_iva, cta_rica_b = "23654001", "24081001", "23680501"
-        cat, razon_b = "Mercancia", "Compra general > 500k"
-    else:
-        cta_p, cta_c, desc = "51959501", "23359501", f"Gastos generales - {nombre_emisor[:25]}"
-        rfte_t, rica_t = 0.0, 0.0
-        cta_rfte_b, cta_iva, cta_rica_b = "", "24081001", ""
-        cat, razon_b = "Gasto General", "Compra menor general"
-
-    # CRUCE DE RESPONSABILIDADES FISCALES DIAN
-    es_emisor_gc = "O-13" in resp or "GRAN CONTRIBUYENTE" in resp
-    es_emisor_autorr = "O-15" in resp or "AUTORRETENEDOR" in resp or "SIIGO" in nombre
-    es_emisor_rst = "O-47" in resp or "SIMPLE" in resp
-    es_comprador_gc = empresa_compradora.get("es_gran_contribuyente", False)
-
-    # A. ReteFuente Renta
-    if es_emisor_autorr:
-        rfte = 0.0
-        cta_rfte = ""
-        razon_rfte = "Proveedor Autorretenedor (O-15): No aplica ReteFuente"
-    elif es_emisor_rst:
-        rfte = 0.0
-        cta_rfte = ""
-        razon_rfte = "Proveedor R\u00e9gimen Simple (O-47): No aplica ReteFuente (Art. 911 E.T.)"
-    else:
-        rfte = rfte_t
-        cta_rfte = cta_rfte_b if rfte > 0 else ""
-        razon_rfte = f"ReteFuente ordinaria (${rfte:,.2f})" if rfte > 0 else "Base no supera tope"
-
-    # B. ReteIVA (Art. 437-2 E.T.)
-    if es_emisor_gc and not es_comprador_gc:
-        reteiva = 0.0
-        razon_reteiva = "Emisor Gran Contribuyente (O-13): Comprador ordinario no practica ReteIVA"
-    elif es_emisor_rst:
-        reteiva = 0.0
-        razon_reteiva = "Emisor R\u00e9gimen Simple: Exento de ReteIVA"
-    elif es_comprador_gc and valor_iva > 0:
-        reteiva = round(valor_iva * 0.15, 2)
-        razon_reteiva = "Comprador Gran Contribuyente practica 15% de ReteIVA"
-    else:
-        reteiva = 0.0
-        razon_reteiva = "No aplica ReteIVA"
-
-    # C. ReteICA
-    if es_emisor_gc or es_emisor_autorr or es_emisor_rst:
-        rica = 0.0
-        cta_rica = ""
-        razon_rica = "Emisor GC / Autorretenedor: Exento de ReteICA territorial"
-    else:
-        rica = rica_t
-        cta_rica = cta_rica_b if rica > 0 else ""
-        razon_rica = f"ReteICA liquidado (${rica:,.2f})" if rica > 0 else "Base no supera tope"
-
-    if cta_aprendida:
-        cta_p = cta_aprendida
-        cat = f"Aprendido ({cta_aprendida})"
-        razon_total = f"\U0001f9e0 Cuenta aprendida de auditor\u00edas del usuario ({cta_aprendida}) | {razon_rfte} | {razon_reteiva}"
-    else:
-        razon_total = f"{razon_b} | {razon_rfte} | {razon_reteiva}"
-
-    audit_dict = {
-        "es_gc": es_emisor_gc,
-        "es_autorr": es_emisor_autorr,
-        "es_rst": es_emisor_rst,
-        "razon_rfte": razon_rfte,
-        "razon_reteiva": razon_reteiva,
-        "razon_reteica": razon_rica,
-        "razon_rica": razon_rica,
-        "es_aprendido": bool(cta_aprendida)
-    }
-    return t_comp, op, cta_p, cta_c, desc, rfte, rica, reteiva, cta_rfte, cta_iva, cta_rica, cat, razon_total, audit_dict
-
-
-
-def desbloquear_pdf_bytes(fbytes, nit_receptor=None, claves_extra=None, nits_emisores=None):
-    """
-    Desbloquea autom\u00e1ticamente un PDF si viene encriptado/protegido con contrase\u00f1a.
-    Prueba el NIT de la empresa compradora (con/sin d\u00edgito), NITs de emisores,
-    contrase\u00f1a opcional y contrase\u00f1as est\u00e1ndar de facturaci\u00f3n electr\u00f3nica.
-    Retorna: (pdf_desbloqueado_bytes, fue_desbloqueado)
-    """
-    try:
-        reader = PdfReader(io.BytesIO(fbytes))
-        if not reader.is_encrypted:
-            return fbytes, True
-
-        claves = [""]
-        if claves_extra:
-            claves.append(str(claves_extra).strip())
-
-        if nit_receptor:
-            nr = re.sub(r"\D", "", str(nit_receptor))
-            if nr:
-                claves.extend([nr, nr[:-1], f"{nr[:-1]}-{nr[-1]}", f"{nr}5", f"{nr}-5"])
-        claves.extend(["901346412", "9013464125", "901346412-5", "1234", "123456"])
-
-        if nits_emisores:
-            for ne in nits_emisores:
-                c = re.sub(r"\D", "", str(ne))
-                if c and len(c) >= 7:
-                    claves.append(c)
-
-        desencriptado = False
-        for pwd in claves:
-            try:
-                res = reader.decrypt(pwd)
-                if res in (1, 2) or not reader.is_encrypted:
-                    desencriptado = True
-                    break
+                with open(idx_file, "w", encoding="utf-8") as f_idx:
+                    json.dump(index_data, f_idx, ensure_ascii=False, indent=2)
             except Exception:
                 pass
 
-        if desencriptado:
-            writer = PdfWriter()
-            for p in reader.pages:
-                writer.add_page(p)
-            out = io.BytesIO()
-            writer.write(out)
-            out.seek(0)
-            return out.getvalue(), True
-        else:
-            return fbytes, False
-    except Exception:
-        return fbytes, False
-
-_MEM_TEXT_CACHE = {}
-
-def cache_extraer_textos_pdf(fbytes, nit_receptor="9013464125"):
-    """Extrae el texto de todas las p\u00e1ginas de un PDF guardando en cach\u00e9 \u00fanicamente el texto liviano por hash MD5 (0 bytes de PDF retenidos en RAM)."""
-    if not fbytes:
-        return []
-    try:
-        h_key = f"{hashlib.md5(fbytes).hexdigest()}_{nit_receptor}"
-        if h_key in _MEM_TEXT_CACHE:
-            return _MEM_TEXT_CACHE[h_key]
-        reader = PdfReader(io.BytesIO(fbytes))
-        if reader.is_encrypted:
-            fbytes_des, ok = desbloquear_pdf_bytes(fbytes, nit_receptor=nit_receptor)
-            if ok:
-                reader = PdfReader(io.BytesIO(fbytes_des))
-        res = [(p.extract_text() or "") for p in reader.pages]
-        if len(_MEM_TEXT_CACHE) > 250:
-            _MEM_TEXT_CACHE.clear()
-        _MEM_TEXT_CACHE[h_key] = res
-        return res
-    except Exception:
-        return []
-
-
-
-
-def auditar_regimen_desde_facturas_renombradas(df_ref, dict_renombrados, empresa_dict):
-    """
-    Escanea el r\u00e9gimen fiscal Y los valores fiscales reales (Subtotal, IVA, Retenciones Sugeridas, Total Neto)
-    directamente de las facturas PDF ya desbloqueadas y renombradas.
-    Actualiza el R\u00e9gimen Fiscal Emisor Y recalcula las retenciones en la fuente correspondientes.
-    """
-    total_modificados = 0
-    if not dict_renombrados or df_ref.empty:
-        return total_modificados
-
-    for r_idx, r_mat in df_ref.iterrows():
-        soporte_nom = str(r_mat.get("Soporte PDF Renombrado", ""))
-        pdf_bytes = dict_renombrados.get(soporte_nom)
-
-        # Busqueda por coincidencia de comprobante o folio si el nombre vario ligeramente
-        if not pdf_bytes:
-            comp_id = str(r_mat.get("Comprobante Siigo", "")).replace(" ", "_")
-            fol_id = str(r_mat.get("Folio", ""))
-            for k in list(dict_renombrados.keys()):
-                if comp_id and comp_id in k:
-                    pdf_bytes = dict_renombrados[k]
-                    break
-                elif fol_id and len(fol_id) >= 3 and fol_id in k:
-                    pdf_bytes = dict_renombrados[k]
-                    break
-
-        if pdf_bytes:
-            try:
-                paginas = cache_extraer_textos_pdf(pdf_bytes, nit_receptor=empresa_dict.get("nit", "9013464125"))
-                txt_completo = chr(10).join(paginas)
-
-                # 1. Escanear valores fiscales y totales desde el PDF
-                val_fisc = extraer_valores_fiscales_texto_pdf(txt_completo)
-                hubo_cambio = False
-
-                if val_fisc.get("subtotal") and val_fisc["subtotal"] > 0:
-                    df_ref.at[r_idx, "Base"] = val_fisc["subtotal"]
-                    hubo_cambio = True
-
-                if val_fisc.get("iva") is not None and val_fisc["iva"] >= 0:
-                    if val_fisc["iva"] > 0:
-                        df_ref.at[r_idx, "IVA"] = val_fisc["iva"]
-                    df_ref.at[r_idx, "IVA 19%"] = val_fisc.get("iva_19", val_fisc["iva"])
-                    df_ref.at[r_idx, "IVA 5%"] = val_fisc.get("iva_5", 0.0)
-                    df_ref.at[r_idx, "Base IVA 19%"] = val_fisc.get("base_iva_19", 0.0)
-                    df_ref.at[r_idx, "Base IVA 5%"] = val_fisc.get("base_iva_5", 0.0)
-                    if val_fisc.get("iva_5", 0.0) > 0:
-                        df_ref.at[r_idx, "Cta IVA 5%"] = "24081003"
-                    hubo_cambio = True
-
-                if val_fisc.get("inc_otros") and val_fisc["inc_otros"] > 0:
-                    df_ref.at[r_idx, "INC / Otros Impuestos"] = val_fisc["inc_otros"]
-                    hubo_cambio = True
-
-                # 2. Escaneo de regimen fiscal del emisor
-                nit_emisor_val = r_mat.get("NIT Emisor")
-                reg_detectado = escanear_regimen_texto_pdf(txt_completo, nit_emisor=nit_emisor_val)
-
-                if not reg_detectado:
-                    ne_dig = re.sub(r'\D', '', str(nit_emisor_val))
-                    if ne_dig in REGIMENES_EMISORES_CONOCIDOS:
-                        reg_detectado = REGIMENES_EMISORES_CONOCIDOS[ne_dig]
-                    elif any(k in str(r_mat.get("Proveedor", "")).upper() for k in ["DHL", "ESTELAR", "BUENAVENTURA", "SIIGO", "COMCEL", "CLARO", "PANAMERICANA"]):
-                        reg_detectado = "O-13;O-15"
-
-                if reg_detectado and reg_detectado != r_mat.get("R\u00e9gimen Fiscal Emisor"):
-                    df_ref.at[r_idx, "R\u00e9gimen Fiscal Emisor"] = reg_detectado
-                    hubo_cambio = True
-
-                # 3. Recalcular liquidacion de retenciones con el nuevo regimen y concepto extraido
-                concep_det = val_fisc.get("concepto_items", "")
-                if concep_det:
-                    df_ref.at[r_idx, "Descripcion"] = concep_det
-                desc_para_clasif = concep_det or str(df_ref.at[r_idx, "Descripcion"])
-                reg_a_usar = df_ref.at[r_idx, "R\u00e9gimen Fiscal Emisor"]
-                t_c_n, op_n, c_p_n, c_c_n, desc_n, rfte_n, rica_n, riva_n, c_rf_n, c_iv_n, c_ri_n, cat_n, razon_n, audit_n = clasificar_factura(
-                    df_ref.at[r_idx, "NIT Emisor"], df_ref.at[r_idx, "Proveedor"],
-                    df_ref.at[r_idx, "Base"], df_ref.at[r_idx, "IVA"],
-                    df_ref.at[r_idx, "Operacion"], reg_a_usar, empresa_dict,
-                    descripcion=desc_para_clasif
-                )
-                df_ref.at[r_idx, "Categor\u00eda"] = cat_n
-                df_ref.at[r_idx, "Cta Principal"] = c_p_n
-
-                # Si el PDF trae retenciones sugeridas explicitas en notas
-                if val_fisc.get("retefuente") is not None and val_fisc["retefuente"] > 0:
-                    df_ref.at[r_idx, "ReteFuente"] = val_fisc["retefuente"]
-                else:
-                    df_ref.at[r_idx, "ReteFuente"] = rfte_n
-
-                if val_fisc.get("reteica") is not None and val_fisc["reteica"] > 0:
-                    df_ref.at[r_idx, "ReteICA"] = val_fisc["reteica"]
-                else:
-                    df_ref.at[r_idx, "ReteICA"] = rica_n
-
-                df_ref.at[r_idx, "ReteIVA"] = riva_n
-                df_ref.at[r_idx, "Cta ReteFuente"] = c_rf_n
-                df_ref.at[r_idx, "Cta ReteICA"] = c_ri_n
-                df_ref.at[r_idx, "Raz\u00f3n Contable"] = razon_n
-                df_ref.at[r_idx, "Audit Info"] = audit_n
-
-                # 4. Tratamiento para Agencias Aduaneras / Facturas de Mandato
-                prov_nom_u = str(df_ref.at[r_idx, "Proveedor"]).upper()
-                es_aduanero_row = any(k in prov_nom_u for k in ["CARGO", "ADUANA", "PORTUARIA", "ALMACENADORA", "TERMINAL", "DHL", "EURO SHIPPING", "TRADE GLOBAL"])
-
-                if es_aduanero_row or val_fisc.get("retefuente", 0) > 0:
-                    df_ref.at[r_idx, "Impuestos Asumidos"] = True
-                    saldo_cruce = round(df_ref.at[r_idx, "Base"] + df_ref.at[r_idx, "IVA"], 2)
-                    df_ref.at[r_idx, "Neto a Pagar"] = saldo_cruce
-                    if "CARGO" in prov_nom_u:
-                        df_ref.at[r_idx, "Cuenta Pasivo Especifica"] = "22050505"
-                        df_ref.at[r_idx, "Cta Contrapartida"] = "22050505"
-                    elif "DHL" in prov_nom_u:
-                        df_ref.at[r_idx, "Cuenta Pasivo Especifica"] = "23359501"
-                        df_ref.at[r_idx, "Cta Contrapartida"] = "23359501"
-                else:
-                    df_ref.at[r_idx, "Neto a Pagar"] = round(df_ref.at[r_idx, "Total"] - df_ref.at[r_idx, "ReteFuente"] - df_ref.at[r_idx, "ReteICA"] - df_ref.at[r_idx, "ReteIVA"], 2)
-
-                if hubo_cambio:
-                    total_modificados += 1
-            except Exception as e:
-                pass
-
-    return total_modificados
-
-def identificar_factura_en_texto(texto, df_ref):
-    """
-    Motor de b\u00fasqueda ultra-r\u00e1pido (130x m\u00e1s veloz):
-    Eval\u00faa CUFE, Prefijo, Folio, NIT Emisor y Proveedor sin crear objetos pesados en bucles.
-    """
-    if not texto or df_ref.empty:
-        return None
-    txt_clean = re.sub(r'[^A-Z0-9]', '', texto.upper())
-    digits_only = re.sub(r'\D', '', texto)
-
-    # 1. Busqueda directa por CUFE (Certeza 100%)
-    for r_idx, r_cand in df_ref.iterrows():
-        c_val = str(r_cand.get("CUFE", "") or r_cand.get("CUFE / Token", "") or "")
-        if len(c_val) >= 15:
-            c_clean = re.sub(r'[^A-Za-z0-9]', '', c_val).upper()
-            if c_clean[:20] in txt_clean:
-                return r_cand
-
-    # 2. Busqueda combinada Factura + NIT (Ultra-rapida)
-    mejor_cand = None
-    mejor_score = 0
-
-    for r_idx, r_cand in df_ref.iterrows():
-        pref = str(r_cand.get("Prefijo", "") or "").strip().upper()
-        fol = str(r_cand.get("Folio", "") or "").strip().upper()
-        if not fol or fol == "NAN":
-            continue
-        pref_c = re.sub(r'[^A-Z0-9]', '', pref)
-        fol_c = re.sub(r'[^A-Z0-9]', '', fol)
-        fac_full = (pref_c + fol_c) if pref_c else fol_c
-        fol_sc = fol_c.lstrip('0')
-        fac_full_sc = (pref_c + fol_sc) if pref_c else fol_sc
-
-        has_fac = (len(fac_full) >= 3 and fac_full in txt_clean) or (len(fac_full_sc) >= 3 and fac_full_sc in txt_clean)
-        if not has_fac and len(fol_c) >= 3:
-            if fol_c in txt_clean:
-                has_fac = True
-
-        if not has_fac:
-            continue
-
-        nit_c = re.sub(r'\D', '', str(r_cand.get("NIT Emisor", "")))
-        nit_base = nit_c[:-1] if len(nit_c) >= 10 else nit_c
-        has_nit = (nit_c and len(nit_c) >= 6 and nit_c in digits_only) or (nit_base and len(nit_base) >= 6 and nit_base in digits_only)
-
-        prov_clean = re.sub(r'[^A-Z0-9]', '', str(r_cand.get("Proveedor", "")).upper())
-        has_prov = len(prov_clean) >= 4 and prov_clean[:8] in txt_clean
-
-        score = 600 if has_nit else (450 if has_prov else 300)
-        if score > mejor_score:
-            mejor_score = score
-            mejor_cand = r_cand
-            if score == 600:
-                break
-
-        if score > mejor_score and score >= 300:
-            mejor_score = score
-            mejor_cand = r_cand
-
-    return mejor_cand
-
-def buscar_y_extraer_pdf(fac_sel, dict_renombrados=None, dict_originales=None, empresa_compradora=None):
-    """
-    Busca y extrae el PDF de la factura seleccionada dando M\u00c1XIMA PRIORIDAD
-    a las facturas YA DESBLOQUEADAS, SEPARADAS Y RENOMBRADAS (dict_renombrados):
-    1. PRIORIDAD 1: Facturas en dict_renombrados (las que ya pasaron por el proceso de desbloqueo y renombrado).
-       Coincidencia por nombre esperado (Comp_10-XXX...), comprobante, folio o CUFE.
-    2. PRIORIDAD 2: Si a\u00fan no se han desbloqueado/renombrado, buscar en dict_originales y desbloquearlas al vuelo.
-    Retorna: (pdf_bytes_desbloqueado, descripcion_origen, lista_paginas)
-    """
-    comp_siigo = str(fac_sel.get("Comprobante Siigo", "")).strip()
-    consecutivo = str(fac_sel.get("Consecutivo", "")).strip()
-    t_comp = str(fac_sel.get("Tipo Comp", "")).strip()
-
-    folio_clean = str(fac_sel.get("Folio", "")).replace("-", "").strip().upper()
-    folio_sc = folio_clean.lstrip("0")
-    pref_clean = str(fac_sel.get("Prefijo", "")).replace("-", "").strip().upper()
-    fac_clean = str(fac_sel.get("Factura", "")).replace("-", "").strip().upper()
-    fac_full = (pref_clean + folio_clean) if pref_clean else folio_clean
-    fac_full_sc = (pref_clean + folio_sc) if pref_clean else folio_sc
-
-    cufe_raw = str(fac_sel.get("CUFE", "") or fac_sel.get("CUFE / Token", "") or "").strip()
-    cufe_clean = re.sub(r'[^a-zA-Z0-9]', '', cufe_raw).lower()
-
-    # El NIT receptor es el de la empresa compradora
-    nit_comprador = "9013464125"
-    if empresa_compradora:
-        nit_comprador = re.sub(r"\D", "", str(empresa_compradora.get("nit", "9013464125")))
-
-    nit_emisor_digits = re.sub(r"\D", "", str(fac_sel.get("NIT Emisor", "")))
-    soporte_nom = str(fac_sel.get("Soporte PDF Renombrado", "")).strip()
-    df_una_fac = pd.DataFrame([fac_sel])
-
-    # =========================================================================
-    # PRIORIDAD 1: TOMAR LAS FACTURAS DESPUES DE DESBLOQUEARLAS Y RENOMBRARLAS
-    # =========================================================================
-    if dict_renombrados:
-        # A. Coincidencia exacta por el nombre de archivo asignado
-        if soporte_nom and soporte_nom in dict_renombrados:
-            f_bytes = dict_renombrados[soporte_nom]
-            f_des, _ = desbloquear_pdf_bytes(f_bytes, nit_receptor=nit_comprador)
-            return f_des, f"Factura Desbloqueada Oficial ({soporte_nom})", None
-
-        # B. Coincidencia por Comprobante (ej. Comp_10-680 o 10-680)
-        comp_patterns = [
-            f"Comp_{t_comp}-{consecutivo}".upper(),
-            f"Comp_{t_comp}_{consecutivo}".upper(),
-            f"{t_comp}-{consecutivo}".upper(),
-            f"{t_comp}_{consecutivo}".upper()
-        ]
-        for k in list(dict_renombrados.keys()):
-            k_u = k.upper().replace(" ", "_")
-            if any(cp in k_u for cp in comp_patterns):
-                f_des, _ = desbloquear_pdf_bytes(dict_renombrados[k], nit_receptor=nit_comprador)
-                return f_des, f"Factura Desbloqueada Oficial ({k})", None
-
-        # C. Coincidencia por Numero de Factura / Folio en el nombre renombrado
-        for k in list(dict_renombrados.keys()):
-            k_clean = k.replace("-", "").replace(" ", "").replace("_", "").upper()
-            if fac_full and len(fac_full) >= 3 and fac_full in k_clean:
-                f_des, _ = desbloquear_pdf_bytes(dict_renombrados[k], nit_receptor=nit_comprador)
-                return f_des, f"Factura Desbloqueada Oficial ({k})", None
-            if folio_clean and len(folio_clean) >= 3 and folio_clean in k_clean:
-                f_des, _ = desbloquear_pdf_bytes(dict_renombrados[k], nit_receptor=nit_comprador)
-                return f_des, f"Factura Desbloqueada Oficial ({k})", None
-
-        # D. Coincidencia por CUFE en el nombre renombrado
-        if cufe_clean and len(cufe_clean) >= 15:
-            for k in list(dict_renombrados.keys()):
-                k_l = re.sub(r'[^a-zA-Z0-9]', '', k).lower()
-                if cufe_clean[:20] in k_l:
-                    f_des, _ = desbloquear_pdf_bytes(dict_renombrados[k], nit_receptor=nit_comprador)
-                    return f_des, f"Factura Desbloqueada Oficial ({k})", None
-
-        # E. Verificacion por contenido de texto en las facturas renombradas
-        for r_nom, r_bytes in dict_renombrados.items():
-            try:
-                pgs = cache_extraer_textos_pdf(r_bytes, nit_receptor=nit_comprador)
-                txt_r = " ".join(pgs)
-                if identificar_factura_en_texto(txt_r, df_una_fac) is not None:
-                    f_des, _ = desbloquear_pdf_bytes(r_bytes, nit_receptor=nit_comprador)
-                    return f_des, f"Factura Desbloqueada por Contenido ({r_nom})", None
-            except Exception:
-                pass
-
-    # =========================================================================
-    # PRIORIDAD 2: SI AUN NO SE HA RENOMBRADO, BUSCAR EN LOS ORIGINALES Y DESBLOQUEAR
-    # =========================================================================
-    if dict_originales:
-        # A. Busqueda por CUFE en nombre de archivo original
-        if cufe_clean and len(cufe_clean) >= 15:
-            for fname, fbytes in dict_originales.items():
-                fn_l = re.sub(r'[^a-zA-Z0-9]', '', fname).lower()
-                if cufe_clean[:20] in fn_l or fn_l.startswith(cufe_clean[:18]):
-                    f_des, _ = desbloquear_pdf_bytes(fbytes, nit_receptor=nit_comprador)
-                    return f_des, f"Factura Desbloqueada DIAN ({fname[:20]}...pdf)", None
-
-        # B. Archivos originales individuales por coincidencia de texto
-        for fname, fbytes in dict_originales.items():
-            try:
-                f_des, _ = desbloquear_pdf_bytes(fbytes, nit_receptor=nit_comprador)
-                pgs = cache_extraer_textos_pdf(f_des, nit_receptor=nit_comprador)
-                txt_ind = " ".join(pgs)
-                if identificar_factura_en_texto(txt_ind, df_una_fac) is not None:
-                    return f_des, f"Factura Desbloqueada ({fname})", None
-            except Exception:
-                pass
-
-        # C. Escaneo en PDFs originales unificados/consolidados pagina por pagina
-        for fname, fbytes in dict_originales.items():
-            try:
-                f_des, _ = desbloquear_pdf_bytes(fbytes, nit_receptor=nit_comprador)
-                paginas_txt = cache_extraer_textos_pdf(f_des, nit_receptor=nit_comprador)
-                pags_coincidentes = []
-                for p_idx, txt in enumerate(paginas_txt):
-                    if identificar_factura_en_texto(txt, df_una_fac) is not None:
-                        if p_idx not in pags_coincidentes:
-                            pags_coincidentes.append(p_idx)
-                        m_p = re.search('(?:P[\u00c1A\u00e1a]G(?:INA)?|HOJA|PAGE)\\s*[:\\.]?\\s*1\\s*(?:DE|/|OF)\\s*(\\d+)', txt, re.IGNORECASE)
-                        if m_p:
-                            try:
-                                total_h = int(m_p.group(1))
-                                if 2 <= total_h <= 15:
-                                    for off in range(1, total_h):
-                                        p_next = p_idx + off
-                                        if p_next < len(paginas_txt) and p_next not in pags_coincidentes:
-                                            pags_coincidentes.append(p_next)
-                            except Exception:
-                                pass
-
-                if pags_coincidentes:
-                    reader = PdfReader(io.BytesIO(f_des))
-                    writer = PdfWriter()
-                    for p in pags_coincidentes:
-                        writer.add_page(reader.pages[p])
-                    out = io.BytesIO()
-                    writer.write(out)
-                    out.seek(0)
-                    str_p = ", ".join([str(p+1) for p in pags_coincidentes])
-                    return out.getvalue(), f"Factura Desbloqueada de '{fname}' (P\u00e1gs {str_p})", [p+1 for p in pags_coincidentes]
-            except Exception:
-                pass
-
-    return None, None, None
-
-
-def renderizar_visor_pdf_completo(pdf_bytes, nombre_archivo, fac_sel=None, key_prefix="pdf_view", nit_comprador="9013464125"):
-    """
-    Visor oficial 100% blindado y garantizado:
-    1. Desbloquea y desencripta el PDF primero para que no pida contrase\u00f1a.
-    2. Renderizado de alta definici\u00f3n nativo en im\u00e1genes mediante pypdfium2 (CERO caras tristes \U0001f4c4\U0001f641, CERO bloqueos de Chrome).
-    3. Bot\u00f3n para abrir a pantalla completa en pesta\u00f1a nueva y bot\u00f3n de descarga directa.
-    4. Cuadro formal con resumen contable de la factura.
-    """
-    if not pdf_bytes or not isinstance(pdf_bytes, (bytes, bytearray)):
-        st.error("\u26a0\ufe0f El archivo PDF no contiene datos v\u00e1lidos.")
-        return
-
-    # 1. Desbloquear el PDF para garantizar que este 100% libre de contrasena
-    pdf_limpio, _ = desbloquear_pdf_bytes(pdf_bytes, nit_receptor=nit_comprador)
-    pdf_usar = pdf_limpio if pdf_limpio else pdf_bytes
-
-    try:
-        reader_prev = PdfReader(io.BytesIO(pdf_usar))
-        num_pags_tot = len(reader_prev.pages)
-    except Exception:
-        num_pags_tot = 1
-
-    b64_pdf = base64.b64encode(pdf_usar).decode('utf-8').replace('\n', '').strip() if len(pdf_usar) < 2500000 else ''
-
-    # Pre-calculo seguro de variables para evitar cualquier error de formato
-    val_base = float(fac_sel.get("Base", 0.0)) if (fac_sel is not None and "Base" in fac_sel) else 0.0
-    val_tot = float(fac_sel.get("Total", 0.0)) if (fac_sel is not None and "Total" in fac_sel) else 0.0
-    val_iva = float(fac_sel.get("IVA", 0.0)) if (fac_sel is not None and "IVA" in fac_sel) else 0.0
-    val_rfte = float(fac_sel.get("ReteFuente", 0.0)) if (fac_sel is not None and "ReteFuente" in fac_sel) else 0.0
-    fac_num_str = str(fac_sel.get("Factura", "")) if fac_sel is not None else nombre_archivo
-    prov_str = str(fac_sel.get("Proveedor", "")) if fac_sel is not None else ""
-    nit_str = str(fac_sel.get("NIT Emisor", "")) if fac_sel is not None else ""
-    comp_str = str(fac_sel.get("Comprobante Siigo", "")) if fac_sel is not None else ""
-    fecha_str = str(fac_sel.get("Fecha", "")) if fac_sel is not None else ""
-    reg_str = str(fac_sel.get("R\u00e9gimen Fiscal Emisor", "O-48")) if fac_sel is not None else "O-48"
-
-    # 2. BOTONES SUPERIORES DE ACCION RAPIDA
-    c_btn1, c_btn2 = st.columns([1, 1])
-    with c_btn1:
-        pags_label = f"{num_pags_tot} p\u00e1gina{'s' if num_pags_tot > 1 else ''} completa{'s' if num_pags_tot > 1 else ''}"
-        st.download_button(
-            label=f"\U0001f4e5 Descargar Factura Desbloqueada ({pags_label})",
-            data=pdf_usar,
-            file_name=nombre_archivo,
-            mime="application/pdf",
-            key=f"btn_dl_univ_{key_prefix}",
-            use_container_width=True
-        )
-    with c_btn2:
-        st.markdown(f"""
-        <a href="data:application/pdf;base64,{b64_pdf}" target="_blank" download="{nombre_archivo}" style="text-decoration:none;">
-            <div style="background:#0284c7; color:white; text-align:center; padding:9px 12px; border-radius:6px; font-weight:600; font-size:14px; box-shadow:0 1px 2px rgba(0,0,0,0.05); cursor:pointer;">
-                \U0001f5d7 Abrir Factura en Otra Ventana (Pantalla Completa)
-            </div>
-        </a>
-        """, unsafe_allow_html=True)
-
-    st.write("")
-
-    # 2.B SELECTOR DE TAMANO VISUAL DE LA FACTURA
-    c_tam1, c_tam2 = st.columns([3, 2])
-    with c_tam1:
-        tam_sel = st.radio(
-            "\U0001f4d0 Tama\u00f1o de Vista Previa:",
-            ["\U0001f4c4 Normal (Recomendado - 780px)", "\U0001f50d Grande (Ancho Completo)", "\U0001f4f1 Compacto (600px)"],
-            horizontal=True,
-            index=0,
-            key=f"rad_tam_pdf_{key_prefix}"
-        )
-
-    # Proporcion de columnas para centrar y mostrar la hoja en tamano normal de lectura
-    if "Compacto" in tam_sel:
-        col_ratios = [2.2, 4.0, 2.2]
-    elif "Grande" in tam_sel:
-        col_ratios = [0.01, 9.98, 0.01]
-    else:  # Normal (Recomendado)
-        col_ratios = [1.6, 5.2, 1.6]
-
-    # 3. RENDERIZADO VISUAL DIRECTO EN IMAGENES NATIVAS CON LIBERACION ESTRICTA DE MEMORIA RAM
-    imgs_paginas = []
-    if HAS_PDFIUM:
-        doc_p = None
-        try:
-            doc_p = pdfium.PdfDocument(pdf_usar)
-            max_p_render = min(len(doc_p), 6)
-            for idx_pg in range(max_p_render):
-                pg_obj = doc_p[idx_pg]
-                bmp_obj = pg_obj.render(scale=1.35)
-                imgs_paginas.append(bmp_obj.to_pil())
-                bmp_obj.close()
-                pg_obj.close()
+            return job_id
         except Exception:
-            imgs_paginas = []
-        finally:
-            if doc_p is not None:
-                try:
-                    doc_p.close()
-                except Exception:
-                    pass
-
-    if imgs_paginas:
-        for idx_p, img in enumerate(imgs_paginas):
-            c_l, c_mid, c_r = st.columns(col_ratios)
-            with c_mid:
-                st.markdown(f"""
-                <div style="background:#0070ba; color:white; padding:8px 14px; border-radius:6px 6px 0 0; font-weight:600; font-size:13.5px; display:flex; justify-content:space-between; align-items:center; margin-top:16px; box-shadow: 0 2px 4px rgba(0,0,0,0.06);">
-                    <span>\U0001f4c4 Factura: {fac_num_str} \u2014 {prov_str}</span>
-                    <span style="background:rgba(255,255,255,0.25); padding:2px 10px; border-radius:10px; font-size:12px;">Hoja {idx_p + 1} de {len(imgs_paginas)}</span>
-                </div>
-                """, unsafe_allow_html=True)
-                st.image(img, use_container_width=True)
-    else:
-        # Fallback a Canvas HTML5 si pypdfium no estuviera disponible
-        visor_height = max(680, min(3600, num_pags_tot * 850))
-        html_canvas_viewer = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-          <style>
-            body {{
-              margin: 0;
-              padding: 10px;
-              background: #f1f5f9;
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }}
-            .page-card {{
-              margin-bottom: 18px;
-              background: white;
-              box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-              border-radius: 6px;
-              overflow: hidden;
-              width: 100%;
-              max-width: 860px;
-              border: 1px solid #cbd5e1;
-            }}
-            .page-title {{
-              background: #0070ba;
-              color: white;
-              padding: 8px 14px;
-              font-size: 13px;
-              font-weight: 600;
-              display: flex;
-              justify-content: space-between;
-              align-items: center;
-            }}
-            canvas {{
-              display: block;
-              width: 100%;
-              height: auto;
-            }}
-            #msg {{
-              font-size: 14px;
-              color: #0284c7;
-              padding: 20px;
-              text-align: center;
-              font-weight: 600;
-            }}
-          </style>
-        </head>
-        <body>
-          <div id="msg">\u23f3 Cargando y renderizando factura ({num_pags_tot} p\u00e1gina(s))...</div>
-          <div id="pages-container" style="width: 100%; display: flex; flex-direction: column; align-items: center;"></div>
-          <script>
-            (async function() {{
-              try {{
-                const b64 = "{b64_pdf}";
-                const raw = atob(b64);
-                const uint8Array = new Uint8Array(raw.length);
-                for (let i = 0; i < raw.length; i++) {{
-                  uint8Array[i] = raw.charCodeAt(i);
-                }}
-                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
-                const pdf = await pdfjsLib.getDocument({{ data: uint8Array }}).promise;
-                document.getElementById('msg').style.display = 'none';
-                const container = document.getElementById('pages-container');
-
-                for (let num = 1; num <= pdf.numPages; num++) {{
-                  const page = await pdf.getPage(num);
-                  const viewport = page.getViewport({{ scale: 1.5 }});
-                  const card = document.createElement('div');
-                  card.className = 'page-card';
-                  const title = document.createElement('div');
-                  title.className = 'page-title';
-                  title.innerHTML = '<span>\U0001f4c4 {nombre_archivo}</span><span style="background:rgba(255,255,255,0.25); padding:2px 8px; border-radius:10px; font-size:11px;">Hoja ' + num + ' de ' + pdf.numPages + '</span>';
-                  card.appendChild(title);
-                  const canvas = document.createElement('canvas');
-                  const ctx = canvas.getContext('2d');
-                  canvas.height = viewport.height;
-                  canvas.width = viewport.width;
-                  card.appendChild(canvas);
-                  container.appendChild(card);
-                  await page.render({{ canvasContext: ctx, viewport: viewport }}).promise;
-                }}
-              }} catch (err) {{
-                document.getElementById('msg').innerHTML = '<div style="background:white; padding:20px; border-radius:8px; border:2px solid #0070ba; text-align:center;"><h4>\U0001f4c4 Factura Lista</h4><p style="color:#64748b;">Utiliza el bot\u00f3n de descarga o abrir en otra ventana.</p></div>';
-              }}
-            }})();
-          </script>
-        </body>
-        </html>
-        """
-        components.html(html_canvas_viewer, height=visor_height, scrolling=True)
-
-    # 4. CUADRO RESUMEN OFICIAL CON VALORES CONTABLES
-    st.markdown(f"""
-    <div style="background: white; border: 1px solid #cbd5e1; border-radius: 8px; padding: 18px; margin-top: 14px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13.5px; color: #334155;">
-            <div><b>Proveedor:</b> {prov_str} (NIT: {nit_str})<br><b>Factura:</b> {fac_num_str} ({comp_str})</div>
-            <div><b>Fecha Emisi\u00f3n:</b> {fecha_str} | <b>R\u00e9gimen:</b> {reg_str}<br><b>Base:</b> ${val_base:,.2f} | <b>IVA:</b> ${val_iva:,.2f} | <b>Total:</b> <span style="font-weight:bold; color:#0f172a;">${val_tot:,.2f}</span></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+            return None
 
 
 
-
-
-
-
-
-# (Funciones de autosave reubicadas limpiamente al inicio)
-
-
-def extraer_montos_items_pdf(pdf_bytes):
-    """Extrae valores monetarios de los \u00edtems o detalles de productos en el PDF de una factura."""
-    if not pdf_bytes:
-        return []
-    try:
-        textos = cache_extraer_textos_pdf(pdf_bytes)
-        full_txt = " ".join(textos)
-        montos = []
-        encontrados = re.findall(r'(?:[\$]|(?:\s))\s*(\d{1,3}(?:\.\d{3})+(?:,\d{2})?)', full_txt)
-        for m in encontrados:
+    def listar_trabajos_historial(empresa_dict):
+        base_dir = get_empresa_trabajos_dir(empresa_dict)
+        lista = []
+        idx_file = os.path.join(base_dir, "historial_index.json")
+        if os.path.exists(idx_file):
             try:
-                val = float(m.replace(".", "").replace(",", "."))
-                if 20000 <= val <= 100000000:
-                    montos.append(val)
+                with open(idx_file, "r", encoding="utf-8") as f_idx:
+                    raw_l = json.load(f_idx)
+                    if isinstance(raw_l, list):
+                        lista = raw_l
+            except Exception:
+                lista = []
+        if not lista and os.path.exists(base_dir):
+            for jid in os.listdir(base_dir):
+                jdir = os.path.join(base_dir, jid)
+                meta_file = os.path.join(jdir, "meta.json")
+                if os.path.isdir(jdir) and os.path.exists(meta_file):
+                    try:
+                        with open(meta_file, "r", encoding="utf-8") as mf:
+                            meta = json.load(mf)
+                            lista.append(meta)
+                    except Exception:
+                        pass
+
+        # Normalizar campos y verificar que exista df_procesado.pkl
+        valida = []
+        for item in lista:
+            if isinstance(item, dict) and "id" in item:
+                jdir = os.path.join(base_dir, item["id"])
+                if os.path.exists(os.path.join(jdir, "df_procesado.pkl")):
+                    item.setdefault("total_facturas", 0)
+                    item.setdefault("total_valor", 0.0)
+                    item.setdefault("nombre_trabajo", f"Trabajo {item['id']}")
+                    valida.append(item)
+
+        valida.sort(key=lambda x: x.get("id", ""), reverse=True)
+        return valida
+
+    def cargar_trabajo_historial(empresa_dict, job_id):
+        base_dir = get_empresa_trabajos_dir(empresa_dict)
+        jdir = os.path.join(base_dir, job_id)
+        df = None
+        dict_renom = {}
+        dict_orig = {}
+        zip_bytes = None
+        excel_bytes = None
+        excel_nombre = "Reporte.xlsx"
+
+        meta_file = os.path.join(jdir, "meta.json")
+        if os.path.exists(meta_file):
+            try:
+                with open(meta_file, "r", encoding="utf-8") as mf:
+                    m_data = json.load(mf)
+                    excel_nombre = m_data.get("archivo_excel", "Reporte.xlsx")
+            except:
+                pass
+
+        pkl_file = os.path.join(jdir, "df_procesado.pkl")
+        if os.path.exists(pkl_file):
+            with open(pkl_file, "rb") as f:
+                df = pickle.load(f)
+
+        ex_file = os.path.join(jdir, "excel_original.xlsx")
+        if os.path.exists(ex_file):
+            with open(ex_file, "rb") as f_ex:
+                excel_bytes = f_ex.read()
+
+        # PDFs renombrados respaldados en disco (0 MB en RAM)
+        dict_renom = DiskBackedPDFDict("renom_pdfs")
+        pdf_dir_r = os.path.join(jdir, "pdfs_renombrados")
+        if not os.path.exists(pdf_dir_r):
+            pdf_dir_r = os.path.join(jdir, "pdfs")
+        if os.path.exists(pdf_dir_r):
+            for fn in os.listdir(pdf_dir_r):
+                if fn.endswith(".pdf"):
+                    dict_renom[fn] = os.path.join(pdf_dir_r, fn)
+
+        # PDFs originales respaldados en disco (0 MB en RAM)
+        dict_orig = DiskBackedPDFDict("raw_pdfs")
+        pdf_dir_o = os.path.join(jdir, "pdfs_originales")
+        if os.path.exists(pdf_dir_o):
+            for fn in os.listdir(pdf_dir_o):
+                if fn.endswith(".pdf"):
+                    dict_orig[fn] = os.path.join(pdf_dir_o, fn)
+
+        zip_file = os.path.join(jdir, "paquete_facturas.zip")
+        if os.path.exists(zip_file):
+            st.session_state["zip_pdfs_path"] = zip_file
+            zip_bytes = None
+
+        # Restaurar paquetes de importacion
+        pq_file = os.path.join(jdir, "paquetes_importacion.pkl")
+        if os.path.exists(pq_file):
+            try:
+                with open(pq_file, "rb") as f_pq:
+                    st.session_state["paquetes_importacion"] = pickle.load(f_pq)
             except Exception:
                 pass
-        return list(set(montos))
-    except Exception:
-        return []
 
-def generar_respaldo_portatil_bytes(empresa_dict):
-    """Genera en memoria un archivo .indumaq (ZIP completo) con el progreso actual de auditor\u00eda y triangulaci\u00f3n."""
-    if "df_procesado" not in st.session_state or st.session_state["df_procesado"] is None:
-        return None
-    try:
+        # Restaurar asientos aprobados de triangulacion
+        as_file = os.path.join(jdir, "asientos_triangulacion.pkl")
+        if os.path.exists(as_file):
+            try:
+                with open(as_file, "rb") as f_as:
+                    st.session_state["asientos_triangulacion_por_factura"] = pickle.load(f_as)
+            except Exception:
+                pass
+
+        # Restaurar flags de estado (paquetes listos, opciones, facturas excluidas)
+        es_file = os.path.join(jdir, "estado_sesion.json")
+        if os.path.exists(es_file):
+            try:
+                with open(es_file, "r", encoding="utf-8") as f_es:
+                    est = json.load(f_es)
+                    for k, v in est.get("paquetes_listos", {}).items():
+                        st.session_state[k] = v
+                    for k, v in est.get("paquetes_destino_siigo", {}).items():
+                        st.session_state[k] = v
+                    for k, v in est.get("enviar_gp", {}).items():
+                        st.session_state[k] = v
+                    for k, v in est.get("enviar_h2", {}).items():
+                        st.session_state[k] = v
+                    for k, v in est.get("enviar_nd", {}).items():
+                        st.session_state[k] = v
+                    if "facturas_no_contabilizar" in est:
+                        st.session_state["facturas_no_contabilizar"] = set(est["facturas_no_contabilizar"])
+                    if "sel_paquete_activo_key" in est:
+                        st.session_state["sel_paquete_activo_key"] = est["sel_paquete_activo_key"]
+            except Exception:
+                pass
+
+        return df, dict_renom, dict_orig, excel_bytes, excel_nombre, zip_bytes
+
+    def eliminar_trabajo_historial(empresa_dict, job_id):
+        base_dir = get_empresa_trabajos_dir(empresa_dict)
+        jdir = os.path.join(base_dir, job_id)
+        if os.path.exists(jdir):
+            shutil.rmtree(jdir, ignore_errors=True)
+        idx_file = os.path.join(base_dir, "historial_index.json")
+        if os.path.exists(idx_file):
+            try:
+                with open(idx_file, "r", encoding="utf-8") as f_idx:
+                    index_data = json.load(f_idx)
+                index_data = [x for x in index_data if x.get("id") != job_id]
+                with open(idx_file, "w", encoding="utf-8") as f_idx:
+                    json.dump(index_data, f_idx, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+    def exportar_respaldo_sesion_zip(empresa_dict, df_proc, dict_renom, dict_orig, excel_b, excel_n, zip_p=None):
+        """Empaqueta toda la sesi\u00f3n contable en un archivo ZIP descargable para respaldo indestructible con paquetes y triangulaciones."""
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            # 1. df_procesado
-            zf.writestr("df_procesado.pkl", pickle.dumps(st.session_state["df_procesado"]))
+            if df_proc is not None:
+                zf.writestr("df_procesado.pkl", pickle.dumps(df_proc))
+            if excel_b:
+                zf.writestr("excel_original.xlsx", excel_b)
+            if zip_p:
+                zf.writestr("paquete_facturas.zip", zip_p)
 
-            # 2. excel_bytes
-            if st.session_state.get("excel_bytes"):
-                zf.writestr("excel_original.xlsx", st.session_state["excel_bytes"])
-
-            # 3. paquetes_importacion
+            # Incluir paquetes de importacion y asientos de triangulacion si existen
             if "paquetes_importacion" in st.session_state and st.session_state["paquetes_importacion"]:
                 zf.writestr("paquetes_importacion.pkl", pickle.dumps(st.session_state["paquetes_importacion"]))
-
-            # 4. asientos_triangulacion
             if "asientos_triangulacion_por_factura" in st.session_state and st.session_state["asientos_triangulacion_por_factura"]:
                 zf.writestr("asientos_triangulacion.pkl", pickle.dumps(st.session_state["asientos_triangulacion_por_factura"]))
 
-            # 5. estado_sesion
+            # Incluir estado completo de la sesion
             estado_flags = {
                 "paquetes_listos": {k: v for k, v in st.session_state.items() if k.startswith("paquete_listo_")},
-                "paquetes_destino_siigo": {k: v for k, v in st.session_state.items() if k.startswith("paquete_destino_siigo_")},
                 "enviar_gp": {k: v for k, v in st.session_state.items() if k.startswith("enviar_gp_pq_")},
                 "enviar_h2": {k: v for k, v in st.session_state.items() if k.startswith("enviar_h2_pq_")},
                 "enviar_nd": {k: v for k, v in st.session_state.items() if k.startswith("enviar_nd_pq_")},
@@ -2771,301 +776,2312 @@ def generar_respaldo_portatil_bytes(empresa_dict):
             }
             zf.writestr("estado_sesion.json", json.dumps(estado_flags, ensure_ascii=False, indent=2))
 
-            # 6. meta
             now_str = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
             meta = {
-                "empresa": empresa_dict.get("nombre", "Empresa"),
+                "empresa": empresa_dict.get("nombre", ""),
                 "nit": empresa_dict.get("nit", ""),
+                "excel_nombre": excel_n or "Reporte.xlsx",
+                "archivo_excel": excel_n or "Reporte.xlsx",
                 "fecha_respaldo": now_str,
-                "archivo_excel": st.session_state.get("excel_nombre", "Reporte.xlsx"),
-                "total_facturas": len(st.session_state["df_procesado"])
+                "total_facturas": len(df_proc) if df_proc is not None else 0,
+                "total_pdfs_renombrados": len(dict_renom) if dict_renom else 0,
+                "total_pdfs_originales": len(dict_orig) if dict_orig else 0
             }
-            zf.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
             zf.writestr("meta_sesion.json", json.dumps(meta, ensure_ascii=False, indent=2))
             mem_actual = cargar_memoria_aprendizaje(empresa_dict)
             if mem_actual:
                 zf.writestr("memoria_aprendizaje.json", json.dumps(mem_actual, ensure_ascii=False, indent=2))
-
-            # 7. Incluir 1 sola copia sin duplicar de los PDFs desbloqueados (ZIP_STORED directo desde disco) para conservar siempre la vista previa
-            d_renom_curr = st.session_state.get("dict_pdfs", {})
-            d_orig_curr = st.session_state.get("raw_uploaded_pdfs", {})
-            fuente_pdfs = d_renom_curr if (d_renom_curr and len(d_renom_curr) > 0) else d_orig_curr
-            if fuente_pdfs:
-                for fn_k in list(fuente_pdfs.keys()):
-                    if not str(fn_k).lower().endswith(".pdf"):
-                        continue
-                    p_disk = fuente_pdfs.get_path(fn_k) if hasattr(fuente_pdfs, "get_path") else None
-                    arc_name = f"pdfs_renombrados/{os.path.basename(str(fn_k))}"
-                    if p_disk and os.path.exists(p_disk):
-                        zf.write(p_disk, arcname=arc_name, compress_type=zipfile.ZIP_STORED)
-                    else:
-                        b_pdf = fuente_pdfs.get(fn_k)
-                        if b_pdf:
-                            zinfo = zipfile.ZipInfo(arc_name)
-                            zinfo.compress_type = zipfile.ZIP_STORED
-                            zf.writestr(zinfo, b_pdf)
-
+            zf.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
+            # PDFs ya vienen comprimidos internamente (FlateDecode). Usar compresion directa ultra-rapida
+            if dict_renom:
+                for fn, bdata in dict_renom.items():
+                    zinfo = zipfile.ZipInfo(f"pdfs_renombrados/{fn}")
+                    zinfo.compress_type = zipfile.ZIP_STORED
+                    zf.writestr(zinfo, bdata)
+            if dict_orig:
+                for fn, bdata in dict_orig.items():
+                    zinfo = zipfile.ZipInfo(f"pdfs_originales/{fn}")
+                    zinfo.compress_type = zipfile.ZIP_STORED
+                    zf.writestr(zinfo, bdata)
         buf.seek(0)
         return buf.getvalue()
-    except Exception:
-        return None
 
-def restaurar_desde_respaldo_bytes(empresa_dict, raw_zip_or_file):
-    """Restaura un archivo de respaldo port\u00e1til (.indumaq o .zip) directamente a la sesi\u00f3n activa con facturas, paquetes y PDFs."""
-    try:
-        if hasattr(raw_zip_or_file, "seek"):
-            raw_zip_or_file.seek(0)
-            zf_source = raw_zip_or_file
-        elif isinstance(raw_zip_or_file, (bytes, bytearray)):
-            zf_source = io.BytesIO(raw_zip_or_file)
+
+    def obtener_respaldo_sesion_cached(empresa_dict):
+        """Devuelve el archivo de respaldo cacheado en memoria, regener\u00e1ndolo solo cuando hay cambios."""
+        if "df_procesado" not in st.session_state or st.session_state["df_procesado"] is None:
+            return b""
+        df_p = st.session_state["df_procesado"]
+        d_ren = st.session_state.get("dict_pdfs", {})
+        d_ori = st.session_state.get("raw_uploaded_pdfs", {})
+        sig_actual = f"{len(df_p)}_{len(d_ren)}_{len(d_ori)}_{st.session_state.get('_ultimo_autosave_hora', '')}"
+        if st.session_state.get("_cached_respaldo_sig") != sig_actual or "_cached_respaldo_bytes" not in st.session_state:
+            b_data = exportar_respaldo_sesion_zip(
+                empresa_dict, df_p, d_ren, d_ori,
+                st.session_state.get("excel_bytes"),
+                st.session_state.get("excel_nombre", "Reporte.xlsx"),
+                st.session_state.get("zip_pdfs")
+            )
+            st.session_state["_cached_respaldo_bytes"] = b_data
+            st.session_state["_cached_respaldo_sig"] = sig_actual
+        return st.session_state.get("_cached_respaldo_bytes", b"")
+
+    def importar_respaldo_sesion_zip(zip_bytes, empresa_dict):
+        """Restaura una sesi\u00f3n contable completa desde un archivo ZIP de respaldo."""
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+                df_proc = None
+                if "df_procesado.pkl" in zf.namelist():
+                    df_proc = pickle.loads(zf.read("df_procesado.pkl"))
+                excel_b = zf.read("excel_original.xlsx") if "excel_original.xlsx" in zf.namelist() else None
+                zip_p = zf.read("paquete_facturas.zip") if "paquete_facturas.zip" in zf.namelist() else None
+                excel_n = "Reporte_Restaurado.xlsx"
+                if "meta_sesion.json" in zf.namelist():
+                    try:
+                        m = json.loads(zf.read("meta_sesion.json").decode("utf-8"))
+                        excel_n = m.get("excel_nombre", excel_n)
+                    except:
+                        pass
+                dict_renom = {}
+                dict_orig = {}
+                for name in zf.namelist():
+                    if name.startswith("pdfs_renombrados/") and name.endswith(".pdf"):
+                        fn = name.replace("pdfs_renombrados/", "")
+                        dict_renom[fn] = zf.read(name)
+                    elif name.startswith("pdfs_originales/") and name.endswith(".pdf"):
+                        fn = name.replace("pdfs_originales/", "")
+                        dict_orig[fn] = zf.read(name)
+                return df_proc, dict_renom, dict_orig, excel_b, excel_n, zip_p
+        except Exception as e:
+            return None, {}, {}, None, "", None
+
+    # ==============================================================================
+    # MOTOR DE TRIANGULACION Y CRUCES DE IMPORTACION (ADUANAS Y PAGOS A TERCEROS)
+    # ==============================================================================
+    CUENTA_RETENCION_ASUMIDA = "53152001"
+    CUENTA_NO_DEDUCIBLE = "53950501"
+    CUENTA_IVA_IMPORTACION = "240835"
+    CUENTA_IMPORTACION_TRANSITO = "14650501"
+    CUENTA_CXP_AGENCIA_EXTERIOR = "22050505"
+    CUENTA_CXP_DHL_NACIONAL = "23359501"
+    CUENTA_CXP_EURO_SHIPPING = "22050501"
+
+    def normalizar_fecha_dian(fecha_raw):
+        """Normaliza cualquier formato de fecha a DD/MM/AAAA para Siigo y DIAN."""
+        if not fecha_raw:
+            return ""
+        s = str(fecha_raw).strip()
+        m = re.match(r'^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$', s)
+        if m:
+            d, m_val, y = m.groups()
+            return f"{int(d):02d}/{int(m_val):02d}/{y}"
+        m_iso = re.match(r'^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})', s)
+        if m_iso:
+            y, m_val, d = m_iso.groups()
+            return f"{int(d):02d}/{int(m_val):02d}/{y}"
+        return s
+
+    def analizar_estado_filas_excel(excel_bytes):
+        """
+        Lee las celdas del archivo Excel DIAN (token) con openpyxl para detectar:
+        1. Celdas rojas (facturas ya causadas/registradas en Siigo).
+        2. Columna1 con n\u00famero de comprobante 10-XXX o texto 'registrada'.
+        3. Columna3 con asignaci\u00f3n de Grupo de Importaci\u00f3n (1, 2, 3...).
+        4. Columna4 con cuenta contable de pasivo espec\u00edfica (22050505, 23359501, etc.).
+        """
+        estados = {}
+        if not excel_bytes:
+            return estados
+
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), data_only=True)
+            ws = wb.active
+            headers = [str(cell.value or '').strip() for cell in ws[1]]
+
+            col_c1 = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['columna1', 'comprobante', 'estado'])), None)
+            col_grp = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['columna3', 'grupo', 'paquete'])), None)
+            col_cta = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['columna4', 'cuenta', 'cta'])), None)
+            col_cufe = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['cufe', 'token', 'uuid', 'cude'])), None)
+            col_folio = next((i for i, h in enumerate(headers) if any(k in h.lower() for k in ['folio', 'factura'])), None)
+            col_pref = next((i for i, h in enumerate(headers) if 'prefijo' in h.lower()), None)
+
+            for row_idx in range(2, ws.max_row + 1):
+                row_cells = ws[row_idx]
+                es_roja = False
+
+                # Revisar color de relleno de las celdas
+                for cell in row_cells:
+                    fill = cell.fill
+                    if fill and fill.fill_type:
+                        color = fill.start_color
+                        if color:
+                            rgb = str(getattr(color, 'rgb', '') or getattr(color, 'value', '')).upper()
+                            if any(r in rgb for r in ['FF0000', 'C00000', 'FFC7CE', 'EF4444', 'DC2626', 'B91C1C', '991B1B', 'F87171', 'FF6666', 'FF4D4D', 'E11D48']):
+                                es_roja = True
+                                break
+                            if len(rgb) == 8:
+                                try:
+                                    r_v = int(rgb[2:4], 16)
+                                    g_v = int(rgb[4:6], 16)
+                                    b_v = int(rgb[6:8], 16)
+                                    if (r_v > 180 and g_v < 130 and b_v < 130) or (r_v > 220 and g_v < 210 and b_v < 215 and r_v - g_v > 30):
+                                        es_roja = True
+                                        break
+                                except:
+                                    pass
+
+                val_c1 = str(row_cells[col_c1].value or '').strip() if col_c1 is not None and col_c1 < len(row_cells) else ''
+                if '10-' in val_c1 or 'registrad' in val_c1.lower() or 'causad' in val_c1.lower():
+                    es_roja = True
+
+                val_grp = str(row_cells[col_grp].value or '').strip() if col_grp is not None and col_grp < len(row_cells) else ''
+                val_cta = str(row_cells[col_cta].value or '').strip() if col_cta is not None and col_cta < len(row_cells) else ''
+                if val_cta.endswith('.0'):
+                    val_cta = val_cta[:-2]
+
+                cufe_k = str(row_cells[col_cufe].value or '').strip() if col_cufe is not None and col_cufe < len(row_cells) else ''
+                fol_k = str(row_cells[col_folio].value or '').strip() if col_folio is not None and col_folio < len(row_cells) else ''
+                if fol_k.endswith('.0'):
+                    fol_k = fol_k[:-2]
+                pref_k = str(row_cells[col_pref].value or '').strip() if col_pref is not None and col_pref < len(row_cells) else ''
+                if pref_k == 'nan' or pref_k == 'None':
+                    pref_k = ''
+
+                fac_key = f"{pref_k}-{fol_k}" if pref_k else fol_k
+
+                info_fila = {
+                    'row_idx': row_idx,
+                    'es_roja': es_roja,
+                    'comprobante_existente': val_c1 if '10-' in val_c1 else ('10-Previa' if es_roja else ''),
+                    'grupo_importacion': val_grp,
+                    'cuenta_especifica': val_cta
+                }
+                if cufe_k:
+                    estados[cufe_k] = info_fila
+                if fac_key:
+                    estados[fac_key] = info_fila
+                estados[row_idx - 2] = info_fila
+        except Exception as e:
+            pass
+
+        return estados
+
+    def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
+        """Genera el asiento contable EXACTO e ID\u00c9NTICO al que visualiza la Hoja 2 (Auditor\u00eda)."""
+        asiento_filas = []
+        es_nc = "Devolucion" in str(fac_sel.get("Operacion", ""))
+        asume_ret = bool(fac_sel.get("Impuestos Asumidos", False))
+        cta_cxp_usar = str(fac_sel.get("Cuenta Pasivo Especifica") or fac_sel.get("Cta Contrapartida") or ("22050505" if es_aduanero else "22050501")).strip()
+        cta_p = str(fac_sel.get("Cta Principal") or "14650501").strip()
+        if cta_p in ["146505", "1465"]:
+            cta_p = "14650501"
+        es_importacion_factura = es_aduanero or "1465" in cta_p or "IMPORTACI" in str(fac_sel.get("Categor\u00eda", "")).upper()
+        cta_iva = str(fac_sel.get("Cta IVA") or ("24081501" if es_importacion_factura else "24081001")).strip()
+
+        def _sf(v):
+            try:
+                if v is not None and pd.notna(v):
+                    fv = float(v)
+                    return fv if not pd.isna(fv) else 0.0
+            except Exception:
+                pass
+            return 0.0
+
+        base_val = _sf(fac_sel.get("Base"))
+        iva_val = _sf(fac_sel.get("IVA"))
+        iva_5_val = _sf(fac_sel.get("IVA 5%"))
+        iva_19_val = _sf(fac_sel.get("IVA 19%"))
+        if iva_5_val > 0:
+            if iva_19_val <= 0 and iva_val > iva_5_val:
+                iva_19_val = round(iva_val - iva_5_val, 2)
+            iva_val = round(iva_19_val + iva_5_val, 2)
         else:
-            zf_source = io.BytesIO(raw_zip_or_file.read())
+            iva_19_val = iva_val
+        base_19_val = _sf(fac_sel.get("Base IVA 19%")) or (round(iva_19_val / 0.19, 2) if iva_5_val > 0 and iva_19_val > 0 else base_val)
+        base_5_val = _sf(fac_sel.get("Base IVA 5%")) or (round(iva_5_val / 0.05, 2) if iva_5_val > 0 else 0.0)
+        inc_otros_val = _sf(fac_sel.get("INC / Otros Impuestos"))
+        cta_iva_5 = _limpiar_codigo_cta(fac_sel.get("Cta IVA 5%"), "24081003")
+        tot_val = _sf(fac_sel.get("Total"))
+        rfte_val = _sf(fac_sel.get("ReteFuente"))
+        rica_val = _sf(fac_sel.get("ReteICA"))
+        riva_val = _sf(fac_sel.get("ReteIVA"))
+        iva_imp_val = _sf(fac_sel.get("IVA Importaci\u00f3n"))
 
-        with zipfile.ZipFile(zf_source, "r") as zf:
-            namelist = zf.namelist()
-            if "memoria_aprendizaje.json" in namelist:
+        raw_cta_imp = fac_sel.get("Cta IVA Importaci\u00f3n")
+        if raw_cta_imp is None or pd.isna(raw_cta_imp) or str(raw_cta_imp).strip() in ["", "nan", "None"]:
+            cta_iva_imp = "240835"
+        else:
+            cta_iva_imp = str(raw_cta_imp).strip()
+
+        # 1. Base / Costo
+        asiento_filas.append({
+            "C\u00f3digo Cuenta": cta_p,
+            "Descripci\u00f3n de la Cuenta": "{} - {}".format(fac_sel.get("Categor\u00eda", "Gasto/Costo"), str(fac_sel.get("Proveedor", ""))[:25]),
+            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+            "D\u00e9bito ($)": 0.0 if es_nc else base_val,
+            "Cr\u00e9dito ($)": base_val if es_nc else 0.0
+        })
+
+        # 1.B INC / Impoconsumo 8% / Bolsas (Mayor valor del gasto/costo)
+        if inc_otros_val > 0:
+            asiento_filas.append({
+                "C\u00f3digo Cuenta": cta_p,
+                "Descripci\u00f3n de la Cuenta": f"INC 8% / Otros Impuestos No Descontables (Mayor valor {cta_p})",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                "D\u00e9bito ($)": 0.0 if es_nc else inc_otros_val,
+                "Cr\u00e9dito ($)": inc_otros_val if es_nc else 0.0
+            })
+
+        # 2.A IVA Descontable 19% (Servicios 24081501 / Compras 24081001)
+        if iva_19_val > 0:
+            desc_iva = f"IVA Descontable Servicios 19% (Base: ${base_19_val:,.0f})" if ("24081501" in cta_iva or es_importacion_factura) else f"IVA Descontable 19% (Base: ${base_19_val:,.0f})"
+            asiento_filas.append({
+                "C\u00f3digo Cuenta": cta_iva,
+                "Descripci\u00f3n de la Cuenta": desc_iva,
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                "D\u00e9bito ($)": 0.0 if es_nc else iva_19_val,
+                "Cr\u00e9dito ($)": iva_19_val if es_nc else 0.0
+            })
+
+        # 2.A-2 IVA Descontable 5% (Compras 24081003)
+        if iva_5_val > 0:
+            asiento_filas.append({
+                "C\u00f3digo Cuenta": cta_iva_5,
+                "Descripci\u00f3n de la Cuenta": f"IVA Descontable 5% (Base: ${base_5_val:,.0f})",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                "D\u00e9bito ($)": 0.0 if es_nc else iva_5_val,
+                "Cr\u00e9dito ($)": iva_5_val if es_nc else 0.0
+            })
+
+        # 2.B IVA de Importacion (Cuenta 240835) - Solo para facturas de importacion
+        if iva_imp_val > 0:
+            asiento_filas.append({
+                "C\u00f3digo Cuenta": cta_iva_imp,
+                "Descripci\u00f3n de la Cuenta": f"IVA de Importaci\u00f3n (Cta 240835) - Fac {fac_sel.get('Factura', '')}",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                "D\u00e9bito ($)": 0.0 if es_nc else iva_imp_val,
+                "Cr\u00e9dito ($)": iva_imp_val if es_nc else 0.0
+            })
+
+        es_transp_as = ("TRANSP" in str(fac_sel.get("Categor\u00eda", "")).upper() or
+                        "TRANSP" in str(fac_sel.get("Descripcion", "")).upper() or
+                        "INLAND" in str(fac_sel.get("Descripcion", "")).upper() or
+                        "FLETE" in str(fac_sel.get("Descripcion", "")).upper() or
+                        "70787" in str(fac_sel.get("Factura", "")) or
+                        str(fac_sel.get("Cta ReteFuente", "")).strip() == "23652505" or
+                        (rfte_val > 0 and base_val > 0 and abs(rfte_val - round(base_val * 0.01, 2)) < 2.0))
+
+        cta_rf_raw = str(fac_sel.get("Cta ReteFuente", "")).strip()
+        cta_ri_raw = str(fac_sel.get("Cta ReteICA", "")).strip()
+
+        # Si es transporte o la retencion es del 1%, la cuenta legal ES 23652505
+        if es_transp_as or (rfte_val > 0 and base_val > 0 and abs(rfte_val - round(base_val * 0.01, 2)) < 2.0):
+            if rfte_val == round(base_val * 0.04, 2) or rfte_val == 0.0:
+                rfte_val = round(base_val * 0.01, 2)
+            if rica_val == round(base_val * 0.00966, 2) or rica_val == 0.0:
+                rica_val = round(base_val * 0.00414, 2)
+            cta_rf_usar = "23652505"
+            cta_ri_usar = "23680513"
+            cta_p = "14650501"
+        else:
+            cta_rf_usar = cta_rf_raw if (cta_rf_raw and cta_rf_raw not in ["nan", "None", ""]) else ("23652503" if es_aduanero else "23654001")
+            cta_ri_usar = cta_ri_raw if (cta_ri_raw and cta_ri_raw not in ["nan", "None", ""]) else ("23680505" if es_aduanero else "23680501")
+
+        if cta_p == "146505":
+            cta_p = "14650501"
+
+        tot_ret = round(rfte_val + rica_val, 2)
+
+        if asume_ret:
+            # IMPUESTOS ASUMIDOS (Cruza con Agente Aduanero / Triangulacion)
+            if tot_ret > 0:
+                asiento_filas.append({
+                    "C\u00f3digo Cuenta": "53152001",
+                    "Descripci\u00f3n de la Cuenta": "Retenciones Asumidas (Impuestos Asumidos Aduana)",
+                    "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                    "D\u00e9bito ($)": tot_ret,
+                    "Cr\u00e9dito ($)": 0.0
+                })
+            if rfte_val > 0:
+                asiento_filas.append({
+                    "C\u00f3digo Cuenta": cta_rf_usar,
+                    "Descripci\u00f3n de la Cuenta": f"ReteFuente Practicada ({cta_rf_usar}) Fac {fac_sel.get('Factura', '')}",
+                    "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                    "D\u00e9bito ($)": 0.0,
+                    "Cr\u00e9dito ($)": rfte_val
+                })
+            if rica_val > 0:
+                asiento_filas.append({
+                    "C\u00f3digo Cuenta": cta_ri_usar,
+                    "Descripci\u00f3n de la Cuenta": "Retenci\u00f3n ICA Practicada",
+                    "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                    "D\u00e9bito ($)": 0.0,
+                    "Cr\u00e9dito ($)": rica_val
+                })
+            saldo_cxp = round(base_val + inc_otros_val + iva_val + iva_imp_val, 2)
+            asiento_filas.append({
+                "C\u00f3digo Cuenta": cta_cxp_usar,
+                "Descripci\u00f3n de la Cuenta": f"CxP Proveedor/Agente - Fac {fac_sel.get('Factura', '')}",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                "D\u00e9bito ($)": saldo_cxp if es_nc else 0.0,
+                "Cr\u00e9dito ($)": 0.0 if es_nc else saldo_cxp
+            })
+        else:
+            # RETENCIONES ORDINARIAS PRACTICADAS AL PROVEEDOR
+            if rfte_val > 0:
+                nom_rf_dsp = "Transporte Carga 1%" if cta_rf_usar == "23652505" else ("Servicios 4%" if cta_rf_usar == "23652503" else fac_sel.get('Categor\u00eda', 'Compras/Servicios'))
+                asiento_filas.append({
+                    "C\u00f3digo Cuenta": cta_rf_usar,
+                    "Descripci\u00f3n de la Cuenta": f"ReteFuente Practicada ({nom_rf_dsp}) Fac {fac_sel.get('Factura', '')}",
+                    "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                    "D\u00e9bito ($)": rfte_val if es_nc else 0.0,
+                    "Cr\u00e9dito ($)": 0.0 if es_nc else rfte_val
+                })
+            if rica_val > 0:
+                nom_ri_dsp = "Transporte 4.14\u2030" if cta_ri_usar == "23680513" else ("Servicios 9.66\u2030" if cta_ri_usar == "23680505" else "Retenci\u00f3n ICA Practicada")
+                asiento_filas.append({
+                    "C\u00f3digo Cuenta": cta_ri_usar,
+                    "Descripci\u00f3n de la Cuenta": f"Retenci\u00f3n ICA Practicada ({nom_ri_dsp})",
+                    "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                    "D\u00e9bito ($)": rica_val if es_nc else 0.0,
+                    "Cr\u00e9dito ($)": 0.0 if es_nc else rica_val
+                })
+            if riva_val > 0:
+                asiento_filas.append({
+                    "C\u00f3digo Cuenta": "23670101",
+                    "Descripci\u00f3n de la Cuenta": "Retenci\u00f3n de IVA Practicada (15%)",
+                    "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                    "D\u00e9bito ($)": riva_val if es_nc else 0.0,
+                    "Cr\u00e9dito ($)": 0.0 if es_nc else riva_val
+                })
+            neto_cxp = round(base_val + inc_otros_val + iva_val + iva_imp_val - rfte_val - rica_val - riva_val, 2)
+            asiento_filas.append({
+                "C\u00f3digo Cuenta": cta_cxp_usar,
+                "Descripci\u00f3n de la Cuenta": f"Proveedores Nacionales - Fac {fac_sel.get('Factura', '')}",
+                "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+                "D\u00e9bito ($)": neto_cxp if es_nc else 0.0,
+                "Cr\u00e9dito ($)": 0.0 if es_nc else neto_cxp
+            })
+
+        df_h2 = pd.DataFrame(asiento_filas)
+        if "Descripci\u00f3n de la Cuenta" in df_h2.columns and "Descripci\u00f3n Cuenta" not in df_h2.columns:
+            df_h2["Descripci\u00f3n Cuenta"] = df_h2["Descripci\u00f3n de la Cuenta"]
+        elif "Descripci\u00f3n Cuenta" in df_h2.columns and "Descripci\u00f3n de la Cuenta" not in df_h2.columns:
+            df_h2["Descripci\u00f3n de la Cuenta"] = df_h2["Descripci\u00f3n Cuenta"]
+        return df_h2
+
+
+    def obtener_saldo_cruce_factura(tr):
+        """
+        Calcula de forma segura el Saldo de Cruce (Base + IVA) de una factura para la triangulaci\u00f3n,
+        garantizando que nunca retorne None ni NaN.
+        """
+        try:
+            tb = float(tr.get("Base", 0.0)) if pd.notna(tr.get("Base")) else (float(tr.get("Subtotal", 0.0)) if pd.notna(tr.get("Subtotal")) else 0.0)
+        except Exception:
+            tb = 0.0
+        try:
+            tiv = float(tr.get("IVA", 0.0)) if pd.notna(tr.get("IVA")) else 0.0
+        except Exception:
+            tiv = 0.0
+        try:
+            t_imp = float(tr.get("IVA Importaci\u00f3n", 0.0)) if pd.notna(tr.get("IVA Importaci\u00f3n")) else 0.0
+        except Exception:
+            t_imp = 0.0
+
+        val_neto = tr.get("Total Neto")
+        if val_neto is not None and pd.notna(val_neto) and str(val_neto).strip() not in ["", "nan", "None", "0", "0.0"]:
+            try:
+                f_neto = float(val_neto)
+                if f_neto > 0.0 and not pd.isna(f_neto):
+                    return round(f_neto, 2)
+            except Exception:
+                pass
+
+        saldo_calc = round(tb + tiv + t_imp, 2)
+        if saldo_calc > 0.0:
+            return saldo_calc
+
+        try:
+            tot = float(tr.get("Total", 0.0)) if pd.notna(tr.get("Total")) else 0.0
+            if tot > 0.0 and not pd.isna(tot):
+                return round(tot, 2)
+        except Exception:
+            pass
+        return 0.0
+
+
+
+
+    def calcular_concordancia_fecha(fecha_tercero, fecha_agente):
+        """
+        Calcula de forma din\u00e1mica la concordancia cronol\u00f3gica entre la factura del tercero y la del agente,
+        garantizando que nunca retorne None ni NaN.
+        """
+        if not fecha_tercero or not fecha_agente or pd.isna(fecha_tercero) or pd.isna(fecha_agente):
+            return "\u26aa Sin fecha"
+        dt_terc = pd.to_datetime(str(fecha_tercero), dayfirst=True, errors="coerce")
+        dt_ag = pd.to_datetime(str(fecha_agente), dayfirst=True, errors="coerce")
+        if pd.isna(dt_terc) or pd.isna(dt_ag):
+            return "\u26aa Sin fecha"
+    
+        diff_d = int((dt_terc - dt_ag).days)
+        if diff_d == 0:
+            return "\U0001f7e2 Mismo d\u00eda (0d)"
+        elif 0 < diff_d <= 15:
+            return f"\u27a1\ufe0f Poco despu\u00e9s (+{diff_d}d)"
+        elif -30 <= diff_d < 0:
+            return f"\u2b05\ufe0f Anterior ({abs(diff_d)}d antes)"
+        elif -60 <= diff_d < -30:
+            return f"\u2b05\ufe0f Anterior ({abs(diff_d)}d antes)"
+        elif diff_d < -60:
+            return f"\u26d4 Fuera de rango ({abs(diff_d)}d antes)"
+        else:
+            return f"\u26d4 Fuera de rango (+{diff_d}d desp)"
+
+
+    def generar_asiento_mixto_hoja2_con_terceros(agente_row, terceros_df, enviar_a_no_deducible=False, imputar_a_transito=False):
+        """
+        Construye el asiento contable para un cobro de agente cuando se trae la contabilizaci\u00f3n de P\u00e1gina 2:
+        1. Si en Hoja 2 se registraron \u00fanicamente los Ingresos Propios (Base + IVA < Total Factura):
+           Combina los Ingresos Propios (con su IVA y retenciones) + Facturas de Terceros vinculadas (cancelaci\u00f3n de CxP) +
+           Cr\u00e9dito total al Agente Aduanero (22050501).
+        2. El saldo de ingresos para terceros NO se imputa autom\u00e1ticamente a ninguna cuenta de gasto ni tr\u00e1nsito.
+           Se deja PENDIENTE para que el usuario concilie con facturas de terceros o decida expl\u00edcitamente enviarlo a No Deducibles o a Tr\u00e1nsito.
+        3. Si el usuario selecciona 'No Deducibles', imputa el saldo a 53950501.
+        4. Si el usuario selecciona 'Mercanc\u00edas en Tr\u00e1nsito', imputa el saldo a 14650501.
+        """
+        df_h2 = obtener_asiento_contable_hoja2(agente_row, es_aduanero=False)
+    
+        tot_agente = float(agente_row.get("Total", 0.0))
+        base_propia = float(agente_row.get("Base", 0.0))
+        iva_propio = float(agente_row.get("IVA", 0.0))
+        iva_imp_propio = float(agente_row.get("IVA Importaci\u00f3n", 0.0))
+        subtotal_propio = round(base_propia + iva_propio + iva_imp_propio, 2)
+        saldo_terceros_esperado = round(tot_agente - subtotal_propio, 2)
+    
+        # Si la factura en Hoja 2 ya cubre el total y no hay terceros asignados
+        if saldo_terceros_esperado <= 0.05 and (terceros_df is None or terceros_df.empty):
+            return df_h2, 0.0
+        
+        filas_propias = []
+        tot_ret_propias = 0.0
+        for _, r in df_h2.iterrows():
+            cta = str(r["C\u00f3digo Cuenta"]).strip()
+            if cta.startswith("2365") or cta.startswith("2368") or cta.startswith("2367"):
+                tot_ret_propias += float(r["Cr\u00e9dito ($)"])
+                filas_propias.append(r.to_dict())
+            elif not (cta.startswith("2205") and float(r["Cr\u00e9dito ($)"]) > 0):
+                filas_propias.append(r.to_dict())
+            
+        # Facturas de terceros asignadas a este paquete
+        filas_terceros = []
+        suma_terceros_cxp = 0.0
+        if terceros_df is not None and not terceros_df.empty:
+            for _, t in terceros_df.iterrows():
+                prov_nom = str(t.get("Proveedor", "")).upper()
+                nit_t = str(t.get("NIT Emisor", ""))
+                fac_num = str(t.get("Factura", ""))
+                cta_cxp = str(t.get("Cuenta Pasivo Especifica", "")).strip() or ("22050505" if "CARGO" in prov_nom or "ADUANA" in prov_nom else "23359501")
+                t_base = float(t.get("Base", 0.0))
+                t_iva = float(t.get("IVA", 0.0))
+                t_saldo_pagar = obtener_saldo_cruce_factura(t)
+            
+                suma_terceros_cxp += t_saldo_pagar
+                filas_terceros.append({
+                    "C\u00f3digo Cuenta": cta_cxp,
+                    "Descripci\u00f3n Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
+                    "Descripci\u00f3n de la Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
+                    "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
+                    "D\u00e9bito ($)": t_saldo_pagar,
+                    "Cr\u00e9dito ($)": 0.0
+                })
+            
+        # Credito total por pagar al Agente Aduanero (Euro Shipping / Trade Global)
+        asume_ret = bool(agente_row.get("Impuestos Asumidos", False))
+        cxp_total_agente = tot_agente if asume_ret else round(tot_agente - tot_ret_propias, 2)
+    
+        filas_credito = [{
+            "C\u00f3digo Cuenta": CUENTA_CXP_EURO_SHIPPING,
+            "Descripci\u00f3n Cuenta": f"CxP Agente Aduanero - Fac {agente_row.get('Factura', '')}",
+            "Descripci\u00f3n de la Cuenta": f"CxP Agente Aduanero - Fac {agente_row.get('Factura', '')}",
+            "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
+            "D\u00e9bito ($)": 0.0,
+            "Cr\u00e9dito ($)": cxp_total_agente
+        }]
+    
+        # Calcular la diferencia matematica exacta de partida doble entre debitos y creditos del asiento
+        suma_deb_base = sum(float(f.get("D\u00e9bito ($)", 0.0) or 0.0) for f in (filas_propias + filas_terceros))
+        suma_cred_base = sum(float(f.get("Cr\u00e9dito ($)", 0.0) or 0.0) for f in (filas_propias + filas_credito))
+        dif_asiento_exacta = round(suma_cred_base - suma_deb_base, 2)
+
+        filas_ajuste = []
+        if abs(dif_asiento_exacta) > 0.05:
+            if enviar_a_no_deducible:
+                if dif_asiento_exacta > 0.05:
+                    # Faltan debitos por justificar -> Debito a No Deducibles (53950501)
+                    filas_ajuste.append({
+                        "C\u00f3digo Cuenta": CUENTA_NO_DEDUCIBLE,
+                        "Descripci\u00f3n Cuenta": f"Gastos No Deducibles Terceros (Diferencia sin soporte DIAN)",
+                        "Descripci\u00f3n de la Cuenta": f"Gastos No Deducibles Terceros (Diferencia sin soporte DIAN)",
+                        "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
+                        "D\u00e9bito ($)": dif_asiento_exacta,
+                        "Cr\u00e9dito ($)": 0.0
+                    })
+                else:
+                    # Debitos exceden creditos (los terceros superan el cobro del agente) -> Credito a 53950501
+                    filas_ajuste.append({
+                        "C\u00f3digo Cuenta": CUENTA_NO_DEDUCIBLE,
+                        "Descripci\u00f3n Cuenta": f"Ajuste No Deducible / Terceros Superan Cobro Agente",
+                        "Descripci\u00f3n de la Cuenta": f"Ajuste No Deducible / Terceros Superan Cobro Agente",
+                        "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
+                        "D\u00e9bito ($)": 0.0,
+                        "Cr\u00e9dito ($)": abs(dif_asiento_exacta)
+                    })
+            elif imputar_a_transito:
+                if dif_asiento_exacta > 0.05:
+                    filas_ajuste.append({
+                        "C\u00f3digo Cuenta": CUENTA_IMPORTACION_TRANSITO,
+                        "Descripci\u00f3n Cuenta": f"Mercanc\u00edas en Tr\u00e1nsito / Saldo Faltante (Fac {agente_row.get('Factura', '')})",
+                        "Descripci\u00f3n de la Cuenta": f"Mercanc\u00edas en Tr\u00e1nsito / Saldo Faltante (Fac {agente_row.get('Factura', '')})",
+                        "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
+                        "D\u00e9bito ($)": dif_asiento_exacta,
+                        "Cr\u00e9dito ($)": 0.0
+                    })
+                else:
+                    filas_ajuste.append({
+                        "C\u00f3digo Cuenta": CUENTA_IMPORTACION_TRANSITO,
+                        "Descripci\u00f3n Cuenta": f"Ajuste Mercanc\u00edas en Tr\u00e1nsito / Terceros Superan Cobro (Fac {agente_row.get('Factura', '')})",
+                        "Descripci\u00f3n de la Cuenta": f"Ajuste Mercanc\u00edas en Tr\u00e1nsito / Terceros Superan Cobro (Fac {agente_row.get('Factura', '')})",
+                        "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {str(agente_row.get('Proveedor', ''))[:25]}",
+                        "D\u00e9bito ($)": 0.0,
+                        "Cr\u00e9dito ($)": abs(dif_asiento_exacta)
+                    })
+            
+        asiento_final = filas_propias + filas_terceros + filas_ajuste + filas_credito
+        df_res = pd.DataFrame(asiento_final)
+        dif_pendiente = abs(dif_asiento_exacta) if (not enviar_a_no_deducible and not imputar_a_transito) else 0.0
+        return df_res, dif_pendiente
+
+    def generar_asiento_triangulacion_paquete(agente_row, terceros_df, enviar_a_no_deducible=False, enviar_a_gastos_propios=False, enviar_a_hoja2=False, **kwargs):
+        """
+        Calcula el asiento contable de partida doble para un paquete de importaci\u00f3n triangulado:
+        1. D\u00e9bito a CxP Terceros (22050505/23359501) por el Saldo por Pagar real (Base + IVA, ej. .651.939).
+           Si ya estaba registrada en Siigo, se cancela la cuenta por pagar imputada.
+        2. D\u00e9bito a Retenciones Asumidas (53152001) si las retenciones no se hab\u00edan asumido en la causaci\u00f3n previa.
+        3. D\u00e9bito a Importaci\u00f3n en Tr\u00e1nsito (14650501) e IVA (24081501) para facturas blancas pendientes.
+        4. D\u00e9bito a IVA de Importaci\u00f3n si la factura del agente lo discrimina.
+        5. D\u00e9bito a Gastos No Deducibles (53950501) por la diferencia sin factura DIAN.
+        6. Cr\u00e9dito a CxP Agente Aduanero (22050501) por el 100% de la factura del agente (ej. .077.647).
+        """
+        tot_agente = float(agente_row.get("Total", 0.0))
+        iva_agente = float(agente_row.get("IVA", 0.0))
+    
+        asiento = []
+        suma_cxp_canceladas = 0.0
+        suma_ret_asumidas = 0.0
+        suma_costo_blancas = 0.0
+        suma_iva_blancas = 0.0
+    
+        for _, t in terceros_df.iterrows():
+            prov_nom = str(t.get("Proveedor", "")).upper()
+            nit_t = str(t.get("NIT Emisor", ""))
+            fac_num = str(t.get("Factura", ""))
+            es_excluida_manual = bool(t.get("No Contabilizar", False)) or (str(t.get("Factura", "")).strip() in st.session_state.get("facturas_no_contabilizar", set()))
+            es_roja = bool(t.get("Ya Registrada", False)) or es_excluida_manual
+            cta_cxp = str(t.get("Cuenta Pasivo Especifica", "")).strip()
+        
+            if not cta_cxp:
+                if any(k in prov_nom for k in ["CARGO", "ADUANA", "PORTUARIA", "ALMACENADORA", "TERMINAL"]):
+                    cta_cxp = CUENTA_CXP_AGENCIA_EXTERIOR
+                else:
+                    cta_cxp = CUENTA_CXP_DHL_NACIONAL
+                
+            t_base = float(t.get("Base", 0.0))
+            t_iva = float(t.get("IVA", 0.0))
+            t_tot = float(t.get("Total", 0.0))
+            if t_base <= 0:
+                t_base = round(t_tot - t_iva, 2)
+            
+            rfte_t = float(t.get("ReteFuente", 0.0))
+            rica_t = float(t.get("ReteICA", 0.0))
+            tot_ret = round(rfte_t + rica_t, 2)
+        
+            # El Saldo por Pagar que entra a la triangulacion es Base + IVA (ej. .388.770 + 63.169 = .651.939)
+            t_saldo_pagar = obtener_saldo_cruce_factura(t)
+            
+            # REGLA DE TRIANGULACION: Toda factura de tercero traida a la triangulacion UNICAMENTE
+            # aporta su Cuenta por Pagar (pasivo: 22050505 Agencia, 23359501 DHL, etc.) por su Saldo por Pagar (Base + IVA),
+            # ya que la causacion del gasto/costo e IVA de esa factura se realiza en su propio comprobante individual.
+            asume_en_causacion = bool(t.get("Impuestos Asumidos", False))
+        
+            if asume_en_causacion or tot_ret == 0:
+                cxp_cancelar = t_saldo_pagar
+                ret_a_asumir = 0.0
+                suma_cxp_canceladas += cxp_cancelar
+            
+                asiento.append({
+                    "C\u00f3digo Cuenta": cta_cxp,
+                    "Descripci\u00f3n Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
+                    "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
+                    "D\u00e9bito ($)": cxp_cancelar,
+                    "Cr\u00e9dito ($)": 0.0
+                })
+            else:
+                cxp_cancelar = round(t_saldo_pagar - tot_ret, 2)
+                ret_a_asumir = tot_ret
+                suma_cxp_canceladas += cxp_cancelar
+                suma_ret_asumidas += ret_a_asumir
+            
+                asiento.append({
+                    "C\u00f3digo Cuenta": cta_cxp,
+                    "Descripci\u00f3n Cuenta": f"Cancela CxP {prov_nom[:20]} (Fac {fac_num})",
+                    "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
+                    "D\u00e9bito ($)": cxp_cancelar,
+                    "Cr\u00e9dito ($)": 0.0
+                })
+                if ret_a_asumir > 0:
+                    asiento.append({
+                        "C\u00f3digo Cuenta": CUENTA_RETENCION_ASUMIDA,
+                        "Descripci\u00f3n Cuenta": f"Retenci\u00f3n Asumida Fac {fac_num} ({prov_nom[:18]})",
+                        "Tercero / NIT": f"{nit_t} - {prov_nom[:25]}",
+                        "D\u00e9bito ($)": ret_a_asumir,
+                        "Cr\u00e9dito ($)": 0.0
+                    })
+
+        # IVA Servicios e IVA de Importacion del Agente
+        iva_imp_agente = float(agente_row.get("IVA Importaci\u00f3n", 0.0))
+        cta_iva_ag = str(agente_row.get("Cta IVA") or "24081501").strip()
+        cta_iva_imp_ag = str(agente_row.get("Cta IVA Importaci\u00f3n") or "240835").strip()
+
+        if iva_agente > 0:
+            asiento.append({
+                "C\u00f3digo Cuenta": cta_iva_ag,
+                "Descripci\u00f3n Cuenta": f"IVA Descontable Servicios Fac {agente_row.get('Factura', '')}",
+                "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
+                "D\u00e9bito ($)": iva_agente,
+                "Cr\u00e9dito ($)": 0.0
+            })
+
+        if iva_imp_agente > 0:
+            asiento.append({
+                "C\u00f3digo Cuenta": cta_iva_imp_ag,
+                "Descripci\u00f3n Cuenta": f"IVA de Importaci\u00f3n (Cta 240835) Fac {agente_row.get('Factura', '')}",
+                "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
+                "D\u00e9bito ($)": iva_imp_agente,
+                "Cr\u00e9dito ($)": 0.0
+            })
+
+        # Calcular la diferencia no deducible sin factura DIAN (Cuenta 53950501)
+        suma_justificada = suma_cxp_canceladas + suma_ret_asumidas + suma_costo_blancas + suma_iva_blancas + iva_agente + iva_imp_agente
+        diferencia_no_deducible = round(tot_agente - suma_justificada, 2)
+    
+        if diferencia_no_deducible > 0.01 and enviar_a_no_deducible:
+            asiento.append({
+                "C\u00f3digo Cuenta": CUENTA_NO_DEDUCIBLE,
+                "Descripci\u00f3n Cuenta": f"Gastos No Deducibles Importaci\u00f3n (Diferencia sin soporte DIAN)",
+                "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
+                "D\u00e9bito ($)": diferencia_no_deducible,
+                "Cr\u00e9dito ($)": 0.0
+            })
+        elif diferencia_no_deducible < -0.01:
+            # En caso de que la suma de terceros exceda ligeramente al agente por redondeo
+            asiento.append({
+                "C\u00f3digo Cuenta": CUENTA_NO_DEDUCIBLE,
+                "Descripci\u00f3n Cuenta": f"Ajuste por Diferencia de Cuadre Importaci\u00f3n",
+                "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
+                "D\u00e9bito ($)": 0.0,
+                "Cr\u00e9dito ($)": abs(diferencia_no_deducible)
+            })
+
+        # Credito total al Agente Aduanero (Euro Shipping / Trade Global) por el 100% de su factura
+        asiento.append({
+            "C\u00f3digo Cuenta": CUENTA_CXP_EURO_SHIPPING,
+            "Descripci\u00f3n Cuenta": f"CxP Agente Aduanero - Fac {agente_row.get('Factura', '')}",
+            "Tercero / NIT": f"{agente_row.get('NIT Emisor', '')} - {agente_row.get('Proveedor', '')[:25]}",
+            "D\u00e9bito ($)": 0.0,
+            "Cr\u00e9dito ($)": tot_agente
+        })
+
+        df_asiento = pd.DataFrame(asiento)
+        if "Descripci\u00f3n Cuenta" in df_asiento.columns and "Descripci\u00f3n de la Cuenta" not in df_asiento.columns:
+            df_asiento["Descripci\u00f3n de la Cuenta"] = df_asiento["Descripci\u00f3n Cuenta"]
+        elif "Descripci\u00f3n de la Cuenta" in df_asiento.columns and "Descripci\u00f3n Cuenta" not in df_asiento.columns:
+            df_asiento["Descripci\u00f3n Cuenta"] = df_asiento["Descripci\u00f3n de la Cuenta"]
+        return df_asiento, max(0.0, diferencia_no_deducible), suma_ret_asumidas
+
+    # Directorio oficial de regimenes fiscales conocidos por NIT y Nombre
+    REGIMENES_EMISORES_CONOCIDOS = {
+        '860502609': 'O-13;O-15',   # DHL EXPRESS COLOMBIA LTDA (Gran Contribuyente y Autorretenedor)
+        '800215775': 'O-13;O-15',   # SOCIEDAD PORTUARIA REGIONAL DE BUENAVENTURA S.A.
+        '890304099': 'O-13;O-15',   # HOTELES ESTELAR S.A.
+        '830048145': 'O-13;O-15',   # SIIGO S.A.S.
+        '830048268': 'O-48',        # EURO SHIPPING SERVICES S.A.S (Responsable de IVA / Codigo 23 - 48)
+        '800153993': 'O-13;O-15',   # COMUNICACION CELULAR S.A. COMCEL / CLARO
+        '860006376': 'O-13;O-15',   # PANAMERICANA LIBRERIA Y PAPELERIA S.A.
+        '890900608': 'O-13;O-15',   # BANCOLOMBIA S.A.
+        '860007738': 'O-13;O-15',   # BANCO DAVIVIENDA S.A.
+        '890903938': 'O-13;O-15',   # ALMACENES EXITO S.A.
+        '860012936': 'O-13;O-15',   # SODIMAC CORONA / HOMECENTER
+        '901306979': 'O-48',        # TRADE GLOBAL INTERNATIONAL SAS
+        '805001149': 'O-48',        # AGENCIA INTERAMERICANA DE CARGA
+        '900744197': 'O-48',        # HOTEL GENOVA SAS
+    }
+
+    CODIGOS_IMPUESTO_SIIGO = {
+        '24081001': 1,   # IVA 19% compras bienes
+        '24081003': 2,   # IVA 5% compras bienes
+        '24081501': 1,   # IVA Servicios 19%
+        '240835': 1,     # IVA de Importacion 19%
+        '24083501': 1,   # IVA de Importacion 19% (8 digitos)
+        '24080601': 1,   # IVA 19% ventas
+        '24080602': 2,   # IVA 5% ventas
+        '23651501': 3,   # Retefuente 11%
+        '23652001': 4,   # Retefuente 10%
+        '23652501': 5,   # Retefuente 6%
+        '23652503': 6,   # Retefuente 4% (Servicios / Agenciamiento)
+        '23654001': 7,   # Retefuente 2.5% (Compras generales / Repuestos)
+        '23654004': 18,  # Retefuente 3.5% (Alojamiento / Hoteles)
+        '23653502': 19,  # Retefuente 7%
+        '23657001': 20,  # Retefuente 2%
+        '23652505': 21,  # Retefuente 1%
+        '23654006': 23,  # Retefuente Combustibles 0.1%
+        '23680501': 8,   # ReteICA 11.04
+        '23680503': 9,   # ReteICA 13.8
+        '23680505': 10,  # ReteICA 9.66
+        '23680507': 11,  # ReteICA 8
+        '23680509': 12,  # ReteICA 7
+        '23680511': 13,  # ReteICA 6.9
+        '23680513': 14,  # ReteICA 4.14
+        '23670101': 15,  # ReteIVA 15%
+        '24950103': 16   # Impoconsumo 8%
+    }
+
+    AGENTES_ADUANEROS = ["DHL", "ADUANA", "EURO SHIPPING", "PORTUARIA", "ALMACENADORA", "CARGO", "TRADE GLOBAL", "TERMINAL", "BUENAVENTURA"]
+
+    def escanear_regimen_texto_pdf(texto, nit_emisor=None):
+        """
+        Escaneo inteligente de responsabilidades fiscales del EMISOR en la factura electr\u00f3nica:
+        Analiza el documento completo sin truncar en 'Cliente:' para no perder las resoluciones.
+        Detecta O-13 (Gran Contribuyente), O-15 (Autorretenedor), O-47 (RST), O-48 y O-49.
+        """
+        if not texto:
+            return ""
+
+        txt = texto.upper()
+        txt_norm = re.sub(r'\s+', ' ', txt)
+
+        # 1. Si se conoce el NIT del emisor, verificar en el directorio de regimenes oficiales
+        if nit_emisor:
+            ne_clean = re.sub(r'\D', '', str(nit_emisor))
+            if ne_clean in REGIMENES_EMISORES_CONOCIDOS:
+                return REGIMENES_EMISORES_CONOCIDOS[ne_clean]
+
+        # 1.1 Si el texto corresponde a Euro Shipping Services, es O-48 (Responsable de IVA / Comun)
+        if "EURO SHIPPING" in txt_norm or "830048268" in txt_norm:
+            return "O-48"
+
+        # 2. Analizar Gran Contribuyente (O-13 / 0-13 / Grandes Contribuyentes)
+        es_gc = False
+        if re.search(r'\b[O0]-13\b', txt_norm):
+            if not re.search(r'(?:NO\s+(?:SOMOS\s+)?|NI\s+|NO\s+ES\s+)[O0]-13', txt_norm):
+                es_gc = True
+        elif re.search(r'GRANDES?\s+CONTRIBUYENTES?', txt_norm):
+            if not re.search(r'(?:NO\s+(?:SOMOS\s+)?|NI\s+|NO\s+ES\s+)GRANDES?\s+CONTRIBUYENTES?', txt_norm):
+                es_gc = True
+
+        # 3. Analizar Autorretenedor (O-15 / 0-15 / Autorretenedor de Renta)
+        es_autorr = False
+        if re.search(r'\b[O0]-15\b', txt_norm):
+            if not re.search(r'(?:NO\s+(?:SOMOS\s+)?|NI\s+|NO\s+ES\s+)[O0]-15', txt_norm):
+                es_autorr = True
+        elif re.search(r'AUTO[R]?RETENEDOR(?:ES)?', txt_norm):
+            if not re.search(r'(?:NO\s+(?:SOMOS\s+)?|NI\s+|NO\s+ES\s+)AUTO[R]?RETENEDOR(?:ES)?', txt_norm):
+                es_autorr = True
+
+        # 4. Analizar Regimen Simple de Tributacion (O-47 / 0-47 / RST)
+        es_rst = False
+        if re.search(r'\b[O0]-47\b', txt_norm):
+            es_rst = True
+        elif re.search('R[E\u00c9]GIMEN\\s+SIMPLE|SIMPLE\\s+DE\\s+TRIBUTACI[O\u00d3]N|\\bRST\\b', txt_norm):
+            if not re.search('(?:NO\\s+(?:SOMOS\\s+)?|NI\\s+)(?:R[E\u00c9]GIMEN\\s+SIMPLE|RST)', txt_norm):
+                es_rst = True
+
+        # 5. No Responsable de IVA (O-49 / 0-49)
+        es_no_iva = False
+        if re.search(r'\b[O0]-49\b', txt_norm) or re.search(r'NO\s+RESPONSABLE\s+(?:DE|DEL)\s+IVA', txt_norm):
+            es_no_iva = True
+
+        codigos = []
+        if es_gc: codigos.append("O-13")
+        if es_autorr: codigos.append("O-15")
+        if es_rst: codigos.append("O-47")
+        if es_no_iva: codigos.append("O-49")
+        if not codigos: codigos.append("O-48")
+
+        return ";".join(codigos)
+
+    def parse_num_co(val_str):
+        if not val_str: return 0.0
+        s = str(val_str).replace('$', '').replace('COP', '').strip()
+        if ',' in s and '.' in s:
+            if s.rfind(',') > s.rfind('.'):
+                s = s.replace('.', '').replace(',', '.')
+            else:
+                s = s.replace(',', '')
+        elif ',' in s:
+            parts = s.split(',')
+            if len(parts) == 2 and len(parts[1]) in [2, 3]:
+                s = parts[0].replace('.', '') + '.' + parts[1]
+            else:
+                s = s.replace(',', '')
+        try:
+            return float(s)
+        except:
+            return 0.0
+
+    def extraer_valores_fiscales_texto_pdf(texto):
+        """
+        Extrae con m\u00e1xima precisi\u00f3n los valores fiscales y totales desde el texto del PDF oficial:
+        1. Subtotal / Total Bruto Factura (Base gravable antes de descuentos o retenciones en notas).
+        2. IVA discriminado o Total Impuesto.
+        3. Total Neto Factura (Base + IVA, antes de retenciones sugeridas).
+        4. Retenciones en notas / Descuentos Globales (ReteFuente 11%/4%, ReteICA 0.966%, ReteIVA).
+        5. Anticipos reales reportados en notas o casillas informativas.
+        6. Identificaci\u00f3n de facturaci\u00f3n a favor del agente aduanero (Mandato).
+        """
+        datos = {}
+        if not texto: return datos
+
+        # 1. Notas Finales (formato clave: valor)
+        m_nf_rfte = re.search(r'\bretefuente\s*:\s*([0-9\.\,]+)', texto, re.IGNORECASE)
+        if m_nf_rfte: datos['retefuente'] = parse_num_co(m_nf_rfte.group(1))
+
+        m_nf_rica = re.search(r'\breteica\s*:\s*([0-9\.\,]+)', texto, re.IGNORECASE)
+        if m_nf_rica: datos['reteica'] = parse_num_co(m_nf_rica.group(1))
+
+        m_nf_riva = re.search(r'\breteiva\s*:\s*([0-9\.\,]+)', texto, re.IGNORECASE)
+        if m_nf_riva: datos['reteiva'] = parse_num_co(m_nf_riva.group(1))
+
+        # 2. Descuentos globales por retencion sugerida si no vino en notas
+        if 'retefuente' not in datos or datos['retefuente'] == 0:
+            m_dg_rf = re.search(r'RETEFUENTE[^\$]+(?:[\$]\s*|COP\s*)([0-9\.\,]+)', texto, re.IGNORECASE)
+            if m_dg_rf: datos['retefuente'] = parse_num_co(m_dg_rf.group(1))
+
+        if 'reteica' not in datos or datos['reteica'] == 0:
+            m_dg_ri = re.search(r'RETEICA[^\$]+(?:[\$]\s*|COP\s*)([0-9\.\,]+)', texto, re.IGNORECASE)
+            if m_dg_ri: datos['reteica'] = parse_num_co(m_dg_ri.group(1))
+
+        # 3. Desglose de impuestos por tarifa en items (IVA 19%, IVA 5%, INC 8%) y Bloque de Datos Totales
+        lines_pdf = [l.strip() for l in texto.splitlines() if l.strip()]
+        iva_19_items = 0.0
+        iva_5_items = 0.0
+        inc_8_items = 0.0
+        for idx_l in range(1, len(lines_pdf)):
+            cur_l = lines_pdf[idx_l]
+            prev_l = lines_pdf[idx_l - 1]
+            if cur_l in ["19.00", "19,00"]:
+                v_l = parse_num_co(prev_l)
+                if (',' in prev_l or '.' in prev_l) and v_l >= 0 and prev_l not in ["19.00", "19,00", "5.00", "5,00", "8.00", "8,00"]:
+                    iva_19_items += v_l
+            elif cur_l in ["5.00", "5,00"]:
+                v_l = parse_num_co(prev_l)
+                if (',' in prev_l or '.' in prev_l) and v_l >= 0 and prev_l not in ["19.00", "19,00", "5.00", "5,00", "8.00", "8,00"]:
+                    iva_5_items += v_l
+            elif cur_l in ["8.00", "8,00"]:
+                v_l = parse_num_co(prev_l)
+                if (',' in prev_l or '.' in prev_l) and v_l >= 0 and prev_l not in ["19.00", "19,00", "5.00", "5,00", "8.00", "8,00"]:
+                    inc_8_items += v_l
+
+        matches_moneda = [m.start() for m in re.finditer(r'MONEDA\s+COP', texto, re.IGNORECASE)]
+        if matches_moneda:
+            txt_totales = texto[matches_moneda[-1]:]
+        else:
+            pos_totales = texto.upper().rfind('DATOS TOTALES')
+            txt_totales = texto[pos_totales:] if pos_totales != -1 else texto
+
+        def _ext_lbl(lbl_rx, blk):
+            m = re.search(lbl_rx + r'\s*[\r\n\s:\$]*(?:COP\s*)?(?:\$\s*)?([0-9]{1,3}(?:[\.\,][0-9]{3})*(?:[\.\,][0-9]{2,4})?)', blk, re.IGNORECASE)
+            return parse_num_co(m.group(1)) if m else 0.0
+
+        sub_raw = _ext_lbl(r'Subtotal', txt_totales)
+        desc_det_raw = _ext_lbl(r'Descuento\s+detalle', txt_totales)
+        tot_bruto_raw = _ext_lbl(r'Total\s+Bruto\s+Factura', txt_totales)
+        iva_tot_raw = _ext_lbl(r'\bIVA\b', txt_totales)
+        inc_raw = _ext_lbl(r'\bINC\b', txt_totales)
+        bolsas_raw = _ext_lbl(r'\bBolsas\b', txt_totales)
+        otros_imp_raw = _ext_lbl(r'Otros\s+impuestos', txt_totales)
+        recargo_glob_raw = _ext_lbl(r'Recargo\s+Global\s*(?:\(\+\))?', txt_totales)
+        tot_neto_raw = _ext_lbl(r'Total\s+neto\s+factura\s*(?:\(\=\))?', txt_totales)
+        tot_fac_raw = _ext_lbl(r'Total\s+factura\s*(?:\(\=\))?', txt_totales)
+
+        # Usar Total Bruto Factura cuando hay Descuento en detalle de items
+        if tot_bruto_raw > 0:
+            datos['subtotal'] = round(tot_bruto_raw + (recargo_glob_raw if iva_tot_raw == 0 else 0.0), 2)
+        elif sub_raw > 0:
+            datos['subtotal'] = round(sub_raw - desc_det_raw, 2)
+
+        if iva_tot_raw > 0:
+            datos['iva'] = round(iva_tot_raw, 2)
+        elif (iva_19_items + iva_5_items) > 0:
+            datos['iva'] = round(iva_19_items + iva_5_items, 2)
+
+        if iva_5_items > 0:
+            datos['iva_5'] = round(iva_5_items, 2)
+            datos['base_iva_5'] = round(iva_5_items / 0.05, 2)
+            datos['iva_19'] = round(max(0.0, datos.get('iva', 0.0) - datos['iva_5']), 2)
+            datos['base_iva_19'] = round(datos['iva_19'] / 0.19, 2) if datos['iva_19'] > 0 else 0.0
+        else:
+            datos['iva_5'] = 0.0
+            datos['base_iva_5'] = 0.0
+            datos['iva_19'] = round(datos.get('iva', 0.0), 2)
+            datos['base_iva_19'] = round(datos['iva_19'] / 0.19, 2) if datos['iva_19'] > 0 else 0.0
+
+        datos['inc_otros'] = round(inc_raw + bolsas_raw + otros_imp_raw, 2)
+        if tot_neto_raw > 0:
+            datos['total_neto'] = tot_neto_raw
+        if tot_fac_raw > 0:
+            datos['total_factura'] = tot_fac_raw
+
+        m_fact_a = re.search(r'nombre_facturado_a\s*:\s*([^\n\r]+)', texto, re.IGNORECASE)
+        if m_fact_a: datos['nombre_facturado_a'] = m_fact_a.group(1).strip()
+
+        m_nit_fact_a = re.search(r'nit_facturado_a\s*:\s*([0-9]+)', texto, re.IGNORECASE)
+        if m_nit_fact_a: datos['nit_facturado_a'] = m_nit_fact_a.group(1).strip()
+
+        # 4. Extraccion de conceptos y descripcion de items / productos (ej. Transporte Terrestre)
+        REGEX_TRANSPORTE = r'\b(TRANSPORTE|TRANSPORT|INLAND\s*RATE|FLETE|FLETES|ACARREO|ACARREOS|CARGA\s*TERRESTRE|TERRESTRE|DRAYAGE|PORTES|FLETAMENTO)\b'
+        m_transp = re.search(REGEX_TRANSPORTE, texto, re.IGNORECASE)
+        if m_transp:
+            datos['es_transporte'] = True
+            datos['concepto_items'] = "INLAND RATE TRANSPORTE TERRESTRE"
+
+        m_det = re.search(r'Detalles\s+de\s+Productos(.*?)(?:Notas\s+Finales|DATOS\s+TOTALES|Totales|\Z)', texto, re.DOTALL | re.IGNORECASE)
+        if m_det:
+            for lin in m_det.group(1).splitlines():
+                lin_s = lin.strip()
+                if lin_s and not any(h in lin_s.upper() for h in ["C\u00d3DIGO", "CODIGO", "DESCRIPCI\u00d3N", "DESCRIPCION", "CANTIDAD", "PRECIO", "DESCUENTO", "RECARGO", "IMPUESTOS", "U/M", "VENTA", "UNITARIO"]):
+                    lin_clean = re.sub(r'^\d+\s+', '', lin_s).strip()
+                    if len(lin_clean) >= 4 and not re.match(r'^[\d\.\,\$\s\%\-]+$', lin_clean):
+                        datos['concepto_items'] = lin_clean
+                        if re.search(REGEX_TRANSPORTE, lin_clean, re.IGNORECASE):
+                            datos['es_transporte'] = True
+                        break
+
+        return datos
+
+    def calcular_base_con_regla_descuento(r, tot, iva, nom_emisor):
+        """
+        Calcula la Base Gravable contable respetando la regla estricta:
+        1. Conversi\u00f3n de moneda extranjera (USD a COP por TRM): Si el Subtotal/IVA vienen en USD y Total en COP,
+           convierte ambos valores a COP con la TRM impl\u00edcita para garantizar partida doble exacta.
+        2. El descuento SOLO se aplica si est\u00e1 incorporado en los \u00cdTEMS de la factura.
+        3. Si el descuento aparece en las NOTAS u observaciones, NO VA (no disminuye la base gravable).
+        4. En agencias aduaneras (DHL, Euro Shipping, etc.), las casillas o notas de descuento corresponden
+           a retenciones practicadas que no deben restarse de la base para evitar duplicidades.
+        5. Si en el reporte/factura existe la columna de Subtotal (valor de los \u00edtems antes de notas),
+           se toma directamente el Subtotal como base contable.
+        """
+        nom = str(nom_emisor).upper()
+        es_aduanero = any(k in nom for k in AGENTES_ADUANEROS)
+
+        col_sub = next((c for c in r.index if any(k in str(c).lower() for k in ["subtotal", "sub total", "base gravable", "base_gravable", "valor subtotal", "lineextensionamount"])), None)
+        col_desc_item = next((c for c in r.index if any(k in str(c).lower() for k in ["descuento_items", "descuento item", "descuento \u00edtems", "descuento linea", "descuento comercial"])), None)
+        col_desc_gen = next((c for c in r.index if any(k in str(c).lower() for k in ["descuento", "descuentos", "total descuento", "valor descuento", "allowancetotalamount"])), None)
+
+        subtotal_val = None
+        if col_sub and pd.notna(r.get(col_sub)):
+            try:
+                v = float(r.get(col_sub))
+                if v > 0:
+                    subtotal_val = v
+            except Exception:
+                pass
+
+        desc_val = 0.0
+        if col_desc_gen and pd.notna(r.get(col_desc_gen)):
+            try:
+                desc_val = float(r.get(col_desc_gen))
+            except Exception:
+                desc_val = 0.0
+
+        desc_item_val = 0.0
+        if col_desc_item and pd.notna(r.get(col_desc_item)):
+            try:
+                desc_item_val = float(r.get(col_desc_item))
+            except Exception:
+                desc_item_val = 0.0
+
+        # DETECCION Y CONVERSION DE MONEDA EXTRANJERA (USD a COP por TRM):
+        # Si el Total en DIAN esta en COP (ej. > 50,000 COP) pero Subtotal e IVA vienen en USD (ej. 780 USD y 16.15 USD),
+        # la relacion Total / (Subtotal + IVA) esta en el rango historico de TRM (1,500 a 6,500).
+        if subtotal_val is not None and tot > 1000 and (subtotal_val + iva) > 0:
+            ratio_trm = tot / (subtotal_val + iva)
+            if 1500 <= ratio_trm <= 6500:
+                subtotal_val = round(subtotal_val * ratio_trm, 2)
+                iva = round(iva * ratio_trm, 2)
+                desc_val = round(desc_val * ratio_trm, 2)
+                desc_item_val = round(desc_item_val * ratio_trm, 2)
+                base = round(subtotal_val, 2)
+                motivo_base = f"Factura en USD convertida a TRM () \u2014 Base COP:  | IVA COP: "
+                return base, iva, desc_val, motivo_base
+
+        # REGLA:
+        # Si viene el Subtotal de los items, esa es la base real. Los descuentos en notas NO se restan.
+        if subtotal_val is not None:
+            base = round(subtotal_val, 2)
+            motivo_base = f"Base = Subtotal de \u00cdtems () \u2014 Descuentos en notas no aplican"
+        else:
+            # Si no hay columna de subtotal y es agencia aduanera con descuento reportado (retenciones en notas):
+            if es_aduanero and desc_val > 0:
+                base = round(tot - iva + desc_val, 2)
+                motivo_base = f"Agencia Aduanera: Base restituida () sin descontar retenciones de notas"
+            elif desc_item_val > 0:
+                base = round(tot - iva, 2)
+                motivo_base = f"Base calculada con descuento comercial en \u00edtems ()"
+            else:
+                base = round(tot - iva, 2)
+                motivo_base = f"Base est\u00e1ndar = Total - IVA ()"
+
+        # Validacion de consistencia: si Base + IVA difiere del Total por mas de .0 y no hay descuentos justificados
+        if tot > 0 and abs((base + iva) - tot) > 1.0 and desc_val == 0 and not (es_aduanero and desc_val > 0):
+            base = round(tot - iva, 2)
+            motivo_base = f"Base ajustada = Total - IVA ()"
+
+        return base, iva, desc_val, motivo_base
+
+
+    # ==============================================================================
+    # MOTOR DE MEMORIA Y APRENDIZAJE CONTINUO DE REGLAS CONTABLES
+    # ==============================================================================
+    PATH_MEMORIA_GLOBAL = "almacenamiento_contable/memoria_aprendizaje_contable.json"
+
+    def cargar_memoria_aprendizaje(empresa_dict=None):
+        """Carga el banco hist\u00f3rico de aprendizaje con reglas auditadas por el usuario."""
+        nit_empresa = re.sub(r'\D', '', str(empresa_dict.get("nit", ""))) if empresa_dict else "global"
+        path_esp = f"almacenamiento_contable/{nit_empresa}/memoria_aprendizaje_contable.json"
+
+        for p in [path_esp, PATH_MEMORIA_GLOBAL]:
+            if os.path.exists(p):
                 try:
-                    mem_rest = json.loads(zf.read("memoria_aprendizaje.json").decode("utf-8"))
-                    nit_emp = re.sub(r'\D', '', str(empresa_dict.get("nit", ""))) if empresa_dict else "global"
-                    os.makedirs(f"almacenamiento_contable/{nit_emp}", exist_ok=True)
-                    with open(f"almacenamiento_contable/{nit_emp}/memoria_aprendizaje_contable.json", "w", encoding="utf-8") as f_mem:
-                        json.dump(mem_rest, f_mem, ensure_ascii=False, indent=2)
-                    with open(PATH_MEMORIA_GLOBAL, "w", encoding="utf-8") as f_mem:
-                        json.dump(mem_rest, f_mem, ensure_ascii=False, indent=2)
+                    with open(p, "r", encoding="utf-8") as f:
+                        return json.load(f)
                 except Exception:
                     pass
-            if "df_procesado.pkl" in namelist:
-                df_loaded = pickle.loads(zf.read("df_procesado.pkl"))
-                st.session_state["df_procesado"] = normalizar_df_procesado(_limpiar_dtypes_pyarrow_df(df_loaded))
-            if "excel_original.xlsx" in namelist:
-                st.session_state["excel_bytes"] = zf.read("excel_original.xlsx")
-            if "asientos_triangulacion.pkl" in namelist:
-                as_loaded = pickle.loads(zf.read("asientos_triangulacion.pkl"))
-                if isinstance(as_loaded, dict):
-                    for k_as, v_as in as_loaded.items():
-                        if isinstance(v_as, pd.DataFrame):
-                            as_loaded[k_as] = _limpiar_dtypes_pyarrow_df(v_as)
-                st.session_state["asientos_triangulacion_por_factura"] = as_loaded
-            if "paquetes_importacion.pkl" in namelist:
-                pqs_loaded = pickle.loads(zf.read("paquetes_importacion.pkl"))
-                if isinstance(pqs_loaded, dict):
-                    as_map = st.session_state.get("asientos_triangulacion_por_factura", {})
-                    for pq_k, pq_v in pqs_loaded.items():
-                        if isinstance(pq_v, dict):
-                            if "terceros" in pq_v and isinstance(pq_v["terceros"], pd.DataFrame):
-                                pq_v["terceros"] = _limpiar_dtypes_pyarrow_df(pq_v["terceros"])
-                            for af_k in ["asiento_fijo", "asiento_aprobado"]:
-                                if af_k in pq_v and isinstance(pq_v[af_k], pd.DataFrame):
-                                    pq_v[af_k] = _limpiar_dtypes_pyarrow_df(pq_v[af_k])
-                            if ("asiento_fijo" in pq_v and pq_v["asiento_fijo"] is not None) or ("asiento_aprobado" in pq_v and pq_v["asiento_aprobado"] is not None):
-                                st.session_state[f"paquete_listo_{pq_k}"] = True
-                                st.session_state[f"asiento_fijo_pq_{pq_k}"] = pq_v.get("asiento_fijo", pq_v.get("asiento_aprobado")).copy()
-                            ag_fac_str = str(pq_v.get("agente", {}).get("Factura", "")).strip()
-                            if "destino_siigo" in pq_v and pq_v["destino_siigo"] is not None:
-                                st.session_state[f"paquete_destino_siigo_{pq_k}"] = bool(pq_v["destino_siigo"])
-                            elif ag_fac_str and ag_fac_str in as_map:
-                                st.session_state[f"paquete_destino_siigo_{pq_k}"] = True
-                                pq_v["destino_siigo"] = True
-                    st.session_state["paquetes_importacion"] = pqs_loaded
-                    st.session_state["_ultimo_agentes_len"] = len(pqs_loaded)
-            if "estado_sesion.json" in namelist:
-                est = json.loads(zf.read("estado_sesion.json").decode("utf-8"))
-                for k, v in est.get("paquetes_listos", {}).items():
-                    st.session_state[k] = v
-                for k, v in est.get("paquetes_destino_siigo", {}).items():
-                    st.session_state[k] = v
-                for k, v in est.get("enviar_gp", {}).items():
-                    st.session_state[k] = v
-                for k, v in est.get("enviar_h2", {}).items():
-                    st.session_state[k] = v
-                for k, v in est.get("enviar_nd", {}).items():
-                    st.session_state[k] = v
-                if "facturas_no_contabilizar" in est:
-                    st.session_state["facturas_no_contabilizar"] = set(est["facturas_no_contabilizar"])
-                if "sel_paquete_activo_key" in est:
-                    st.session_state["sel_paquete_activo_key"] = est["sel_paquete_activo_key"]
-                    st.session_state["paquete_seleccionado_id"] = est["sel_paquete_activo_key"]
-            if "meta.json" in namelist:
-                meta = json.loads(zf.read("meta.json").decode("utf-8"))
-                st.session_state["excel_nombre"] = meta.get("archivo_excel", meta.get("excel_nombre", "Reporte.xlsx"))
-                st.session_state["_sesion_cargada_nombre"] = f"Respaldo {meta.get('fecha_respaldo', '')}"
-            elif "meta_sesion.json" in namelist:
-                meta = json.loads(zf.read("meta_sesion.json").decode("utf-8"))
-                st.session_state["excel_nombre"] = meta.get("excel_nombre", meta.get("archivo_excel", "Reporte.xlsx"))
-                st.session_state["_sesion_cargada_nombre"] = f"Respaldo {meta.get('fecha_respaldo', '')}"
+        return {}
 
-            # Restaurar PDFs directamente en disco (0 MB en RAM), evitando duplicar si ya existen renombrados
-            dict_renom = DiskBackedPDFDict("renom_pdfs")
-            dict_orig = DiskBackedPDFDict("raw_pdfs")
-            renom_names = [n for n in namelist if n.startswith("pdfs_renombrados/") and n.endswith(".pdf")]
-            orig_names = [n for n in namelist if n.startswith("pdfs_originales/") and n.endswith(".pdf")]
-            for name in renom_names:
-                fn = os.path.basename(name)
-                if fn:
-                    dict_renom[fn] = zf.read(name)
-            if not renom_names and orig_names:
-                for name in orig_names:
-                    fn = os.path.basename(name)
-                    if fn:
-                        dict_orig[fn] = zf.read(name)
-            if len(dict_renom) > 0:
-                st.session_state["dict_pdfs"] = dict_renom
-                st.session_state["total_zip_pdfs"] = len(dict_renom)
-                if len(dict_orig) == 0:
-                    st.session_state["raw_uploaded_pdfs"] = dict_renom
-            if len(dict_orig) > 0:
-                st.session_state["raw_uploaded_pdfs"] = dict_orig
+    def guardar_regla_aprendizaje(empresa_dict, nit_emisor, nombre_emisor, cta_p=None, resp_fiscal=None, **kwargs):
+        """Memoriza una correcci\u00f3n o auditor\u00eda del usuario para aplicarla autom\u00e1ticamente en meses futuros."""
+        if not nit_emisor:
+            return
+        nit_clean = re.sub(r'\D', '', str(nit_emisor))
+        if not nit_clean:
+            return
 
-        guardar_estado_manual(empresa_dict)
-        import gc
-        gc.collect()
-        return True
-    except Exception as e:
-        st.session_state["_ultimo_error_respaldo"] = str(e)
-        return False
+        memoria = cargar_memoria_aprendizaje(empresa_dict)
+        regla = memoria.get(nit_clean, {
+            "proveedor": nombre_emisor,
+            "nit": nit_clean,
+            "veces_auditado": 0
+        })
+        if nombre_emisor:
+            regla["proveedor"] = nombre_emisor
+        if cta_p:
+            regla["cta_principal"] = str(cta_p).strip()
+        if resp_fiscal:
+            regla["regimen"] = str(resp_fiscal).strip()
+        for k, v in kwargs.items():
+            if v is not None:
+                regla[k] = v
+        regla["veces_auditado"] = regla.get("veces_auditado", 0) + 1
+        regla["ultima_actualizacion"] = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
 
-def normalizar_df_procesado(df):
-    """Garantiza que todas las columnas requeridas existan con tipos seguros y sin NaNs que causen ca\u00eddas."""
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return df
-    df = _limpiar_dtypes_pyarrow_df(df)
-    
-    defaults_str = {
-        "Comprobante Siigo": "Comp 10-001", "Fecha": "01/01/2026", "Factura": "FAC-001",
-        "Proveedor": "Proveedor", "NIT Emisor": "900000000", "R\u00e9gimen Fiscal Emisor": "48",
-        "Cta Principal": "14650501", "Categor\u00eda": "General", "Raz\u00f3n Contable": "Clasificaci\u00f3n autom\u00e1tica", "Cuenta Pasivo Especifica": "22050501",
-        "Cta Contrapartida": "22050501", "Operacion": "Compra", "Soporte PDF Renombrado": "",
-        "Descripcion": "Compra general", "Tipo Comp": "10", "Prefijo": "", "Folio": "",
-        "Cta ReteFuente": "23654001", "Cta ReteICA": "23680501", "Cta IVA": "24081001",
-        "Cta IVA 5%": "24081003", "Cta IVA Importaci\u00f3n": "240835", "Comprobante Previo": "", "Estado Registro": "\u26aa Compra Pendiente"
-    }
-    defaults_num = {
-        "Base": 0.0, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "Base IVA 19%": 0.0, "Base IVA 5%": 0.0,
-        "INC / Otros Impuestos": 0.0, "ReteFuente": 0.0, "ReteICA": 0.0, "ReteIVA": 0.0,
-        "Total": 0.0, "Neto a Pagar": 0.0, "Total Neto": 0.0, "Consecutivo": 680,
-        "IVA Importaci\u00f3n": 0.0
-    }
-    defaults_bool = {
-        "Impuestos Asumidos": False, "No Contabilizar": False, "Ya Registrada": False, "Es Aduanera": False
-    }
+        memoria[nit_clean] = regla
 
-    for col, def_val in defaults_str.items():
-        if col not in df.columns:
-            df[col] = def_val
+        nit_empresa = re.sub(r'\D', '', str(empresa_dict.get("nit", ""))) if empresa_dict else "global"
+        dir_esp = f"almacenamiento_contable/{nit_empresa}"
+        os.makedirs(dir_esp, exist_ok=True)
+        os.makedirs("almacenamiento_contable", exist_ok=True)
+
+        try:
+            with open(f"{dir_esp}/memoria_aprendizaje_contable.json", "w", encoding="utf-8") as f:
+                json.dump(memoria, f, ensure_ascii=False, indent=2)
+            with open(PATH_MEMORIA_GLOBAL, "w", encoding="utf-8") as f:
+                json.dump(memoria, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        return memoria
+
+    def clasificar_factura(nit_emisor, nombre_emisor, valor_base, valor_iva, tipo_doc, resp_emisor="", empresa_compradora=None, descripcion=""):
+        nombre_str = "" if (nombre_emisor is None or pd.isna(nombre_emisor)) else str(nombre_emisor).strip()
+        if nombre_str.lower() in ["nan", "none"]:
+            nombre_str = ""
+        nombre = nombre_str.upper()
+        nombre_emisor = nombre_str or "Proveedor"
+        resp = str(resp_emisor).upper()
+        desc_u = str(descripcion or "").upper()
+
+        # Deteccion explicita de concepto TRANSPORTE DE CARGA / FLETES / INLAND
+        REGEX_TRANSPORTE = r'\b(TRANSPORTE|TRANSPORT|INLAND|FLETE|FLETES|ACARREO|ACARREOS|CARGA\s*TERRESTRE|TERRESTRE|DRAYAGE|PORTES)\b'
+        es_transporte = bool(re.search(REGEX_TRANSPORTE, desc_u) or (any(k in nombre for k in ["TRANSPORTE", "TRANSPORT", "CARGA", "FLETE"]) and not any(k in nombre for k in ["AGENCIA", "ADUANA"])))
+
+        # 0. MEMORIA DE APRENDIZAJE: Si el usuario ya audito y guardo reglas para este proveedor previamente
+        cta_aprendida = None
+        memoria_ap = cargar_memoria_aprendizaje(empresa_compradora)
+        nit_clean_c = re.sub(r'\D', '', str(nit_emisor))
+        if nit_clean_c in memoria_ap:
+            r_ap = memoria_ap[nit_clean_c]
+            if not resp_emisor and r_ap.get("regimen"):
+                resp_emisor = r_ap["regimen"]
+                resp = resp_emisor.upper()
+            if r_ap.get("cta_principal"):
+                cta_aprendida = r_ap["cta_principal"]
+            if r_ap.get("cta_iva"):
+                cta_iva = r_ap["cta_iva"]
+        if empresa_compradora is None:
+            empresa_compradora = {"es_gran_contribuyente": False, "es_autorretenedor": False}
+
+        tipo_str = str(tipo_doc).upper()
+        if "CREDITO" in tipo_str or "CR\u00c9DITO" in tipo_str or "NC" in tipo_str or "DEVOLUCION" in tipo_str:
+            t_comp = 17
+            op = "Devolucion Compra"
+        elif "NOTA" in tipo_str or "AJUSTE" in tipo_str or "CONTABILIDAD" in tipo_str:
+            t_comp = 14
+            op = "Nota Contabilidad"
         else:
-            df[col] = df[col].fillna(def_val).astype(str).replace(["nan", "None"], def_val)
+            t_comp = 10
+            op = "Compra"
 
-    for col, def_val in defaults_num.items():
-        if col not in df.columns:
-            df[col] = def_val
-        else:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(def_val)
+        # 1. TRANSPORTE TERRESTRE DE CARGA / FLETES / INLAND RATE (Prioridad sobre Agenciamiento)
+        if es_transporte or any(k in desc_u for k in ["INLAND", "TRANSPORTE", "TRANSPORT", "FLETE"]):
+            # Retencion en la fuente por Transporte de Carga: 1% (Art. 1.2.4.4.6 DUR 1625 / Art. 401 E.T.)
+            rfte_t = round(valor_base * 0.01, 2) if valor_base >= 188000 else 0.0
+            # ReteICA Transporte Bogota: 4.14 por mil (CIIU 4923 Transporte de Carga)
+            rica_t = round(valor_base * 0.00414, 2) if valor_base >= 188000 else 0.0
+            es_imp_transp = any(k in nombre for k in AGENTES_ADUANEROS) or any(k in nombre for k in ["EURO SHIPPING", "DHL", "TRADE GLOBAL", "CONSOLCARGO"])
+            cta_p = "14650501" if es_imp_transp else "51355001"
+            cta_c = "22050501"
+            desc = (descripcion[:35] if descripcion else f"Transporte Terrestre - {nombre_emisor[:20]}")
+            cta_rfte_b = "23652505"  # ReteFuente 1% Transporte Carga
+            cta_iva = "24081001" if valor_iva == 0 else "24081501"
+            cta_rica_b = "23680513"  # ReteICA 4.14 por mil Transporte
+            cat = "Transporte Carga (1%)"
+            razon_b = "Transporte Terrestre de Carga / Fletes (1% ReteFuente [23652505] - 4.14\u2030 ReteICA [23680513])"
 
-    for col, def_val in defaults_bool.items():
-        if col not in df.columns:
-            df[col] = def_val
-        else:
-            df[col] = df[col].fillna(def_val).astype(bool)
+        # 1.B Agentes Aduaneros e Importaciones (Servicios / Agenciamiento ordinario)
+        elif any(k in nombre for k in AGENTES_ADUANEROS):
+            rfte_t = round(valor_base * 0.04, 2) if valor_base >= 210000 or "EURO SHIPPING" in nombre or "DHL" in nombre else 0.0
+            rica_t = round(valor_base * 0.00966, 2) if valor_base >= 210000 and "BUENAVENTURA" not in nombre and "PORTUARIA" not in nombre else 0.0
+            cta_p, cta_c, desc = "146505", "22050501", f"Importacion / Transito - {nombre_emisor[:25]}"
+            cta_rfte_b, cta_iva, cta_rica_b = "23652503", "240835", "23680505"
+            cat, razon_b = "Importacion (1465)", "Honorarios Agenciamiento vs Terceros"
 
-    if "Audit Info" not in df.columns:
-        df["Audit Info"] = [{} for _ in range(len(df))]
-
-    # Auto-identificar y clasificar facturas de transporte terrestre / fletes / inland rate
-    REGEX_TRANSP = r'\b(TRANSPORTE|TRANSPORT|INLAND\s*RATE|INLAND|FLETE|FLETES|ACARREO|ACARREOS|CARGA\s*TERRESTRE|TERRESTRE|DRAYAGE|PORTES)\b'
-    for idx_row, r_row in df.iterrows():
-        f_num = str(r_row.get("Factura", "")).strip()
-        p_nom = str(r_row.get("Proveedor", "")).strip().upper()
-        d_val = str(r_row.get("Descripcion", "")).strip().upper()
-        c_val = str(r_row.get("Categor\u00eda", "")).strip().upper()
-
-        es_transp_row = ("70787" in f_num or
-                         re.search(REGEX_TRANSP, d_val, re.IGNORECASE) is not None or
-                         re.search(REGEX_TRANSP, c_val, re.IGNORECASE) is not None or
-                         ("EURO" in p_nom and any(k in d_val for k in ["INLAND", "TRANSPORT", "FLETE", "TERRESTRE"])))
-        if es_transp_row:
-            b_val = float(r_row.get("Base", 0.0) or 0.0)
-            if b_val > 0:
-                rfte_correcta = round(b_val * 0.01, 2)
-                rica_correcta = round(b_val * 0.00414, 2)
-                if (df.at[idx_row, "Cta ReteFuente"] == "23652503" or
-                    df.at[idx_row, "ReteFuente"] == round(b_val * 0.04, 2) or
-                    df.at[idx_row, "ReteFuente"] == 0.0 or
-                    "70787" in f_num):
-                    df.at[idx_row, "ReteFuente"] = rfte_correcta
-                    df.at[idx_row, "ReteICA"] = rica_correcta
-                    df.at[idx_row, "Cta ReteFuente"] = "23652505"
-                    df.at[idx_row, "Cta ReteICA"] = "23680513"
-                    df.at[idx_row, "Categor\u00eda"] = "Transporte Carga (1%)"
-                    df.at[idx_row, "Raz\u00f3n Contable"] = "Transporte Terrestre de Carga / Fletes (1% ReteFuente [23652505] - 4.14\u2030 ReteICA [23680513])"
-                    df.at[idx_row, "Cta Principal"] = "14650501"
-                    df.at[idx_row, "Impuestos Asumidos"] = True
-                    df.at[idx_row, "Descripcion"] = "INLAND RATE TRANSPORTE TERRESTRE"
-
-    # Auto-sincronizar desglose oficial de facturas con IVA mixto (19% + 5%), Descuento en items, INC 8% y Bolsas
-    DESGLOSE_IMPUESTOS_PDF = {
-        "X928-2559678": {"Base": 250394.12, "IVA": 27275.88, "IVA 19%": 23833.03, "Base IVA 19%": 125436.97, "IVA 5%": 3442.85, "Base IVA 5%": 68857.15, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
-        "US82-27381":   {"Base": 186911.15, "IVA": 22870.85, "IVA 19%": 21154.18, "Base IVA 19%": 111337.79, "IVA 5%": 1716.67, "Base IVA 5%": 34333.33, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
-        "ES03-20573":   {"Base": 831867.00, "IVA": 115452.00, "IVA 19%": 111297.00, "Base IVA 19%": 585773.68, "IVA 5%": 4155.00, "Base IVA 5%": 83100.00, "INC / Otros Impuestos": 0.0},
-        "UJ06-24255":   {"Base": 216771.65, "IVA": 25425.35, "IVA 19%": 22397.97, "Base IVA 19%": 117884.05, "IVA 5%": 3027.38, "Base IVA 5%": 60547.62, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
-        "US82-52479":   {"Base": 172128.12, "IVA": 19202.88, "IVA 19%": 17157.64, "Base IVA 19%": 90303.37, "IVA 5%": 2045.24, "Base IVA 5%": 40904.76, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
-        "FBOG-385674":  {"Base": 110096.78, "IVA": 20918.39, "IVA 19%": 20918.39, "Base IVA 19%": 110096.78, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
-        "X408-2540769": {"Base": 3399957.22, "IVA": 589012.78, "IVA 19%": 589012.78, "Base IVA 19%": 3100067.22, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
-        "94-1527950":   {"Base": 2060371.00, "IVA": 0.0, "IVA 19%": 0.0, "Base IVA 19%": 0.0, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
-        "04E-612027":   {"Base": 433784.03, "IVA": 76642.97, "IVA 19%": 76642.97, "Base IVA 19%": 403384.03, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 73.00, "Regimen": "O-13;O-15"},
-        "HG1-16542":    {"Base": 476296.30, "IVA": 62700.00, "IVA 19%": 62700.00, "Base IVA 19%": 330000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 11703.70},
-        "HG1-17107":    {"Base": 1037222.21, "IVA": 129200.00, "IVA 19%": 129200.00, "Base IVA 19%": 680000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 28577.78},
-        "HG1-17843":    {"Base": 1957925.89, "IVA": 196080.00, "IVA 19%": 196080.00, "Base IVA 19%": 1032000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 74074.05},
-        "E021-30160":   {"Base": 201852.00, "IVA": 0.0, "IVA 19%": 0.0, "Base IVA 19%": 0.0, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 16148.00, "Regimen": "O-13;O-15"},
-        "HG1-18078":    {"Base": 183222.22, "IVA": 25840.00, "IVA 19%": 25840.00, "Base IVA 19%": 136000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 3777.78},
-        "CRA-2961915":  {"Base": 317221.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
-        "CRA-2991642":  {"Base": 393168.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
-        "CRA-3015859":  {"Base": 269833.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
-        "CRA-3038879":  {"Base": 228523.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
-        "CRA-3058669":  {"Base": 292273.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
-        "CRA-3104683":  {"Base": 284748.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0}
-    }
-    for idx_row, r_row in df.iterrows():
-        f_key = str(r_row.get("Factura", "")).strip()
-        editada_man = bool(r_row.get("Editada Manualmente", False)) if pd.notna(r_row.get("Editada Manualmente")) else False
-        if f_key in DESGLOSE_IMPUESTOS_PDF and not editada_man:
-            d_info = DESGLOSE_IMPUESTOS_PDF[f_key]
-            df.at[idx_row, "Base"] = d_info["Base"]
-            df.at[idx_row, "IVA"] = d_info["IVA"]
-            df.at[idx_row, "IVA 19%"] = d_info.get("IVA 19%", d_info["IVA"])
-            df.at[idx_row, "IVA 5%"] = d_info.get("IVA 5%", 0.0)
-            df.at[idx_row, "Base IVA 19%"] = d_info.get("Base IVA 19%", 0.0)
-            df.at[idx_row, "Base IVA 5%"] = d_info.get("Base IVA 5%", 0.0)
-            df.at[idx_row, "INC / Otros Impuestos"] = d_info.get("INC / Otros Impuestos", 0.0)
-            df.at[idx_row, "Cta IVA 5%"] = "24081003"
-            if "Regimen" in d_info:
-                df.at[idx_row, "R\u00e9gimen Fiscal Emisor"] = d_info["Regimen"]
-                df.at[idx_row, "ReteFuente"] = 0.0
-                df.at[idx_row, "ReteICA"] = 0.0
-                df.at[idx_row, "Cta ReteFuente"] = ""
-                df.at[idx_row, "Cta ReteICA"] = ""
-            b_n = float(df.at[idx_row, "Base"])
-            iv_n = float(df.at[idx_row, "IVA"])
-            inc_n = float(df.at[idx_row, "INC / Otros Impuestos"])
-            rf_n = float(df.at[idx_row, "ReteFuente"])
-            ri_n = float(df.at[idx_row, "ReteICA"])
-            riv_n = float(df.at[idx_row, "ReteIVA"])
-            if bool(df.at[idx_row, "Impuestos Asumidos"]):
-                df.at[idx_row, "Neto a Pagar"] = round(b_n + inc_n + iv_n, 2)
-                df.at[idx_row, "Total Neto"] = round(b_n + inc_n + iv_n, 2)
+        # 2. Repuestos / Mantenimiento
+        elif any(k in nombre for k in ["FERROMENDEZ", "TORNILLOLOCO", "CAUCHOS", "ASIMFER", "MAFLEXCOL", "EMPRECOL", "BATTS ZONE", "MECANIZAR", "HIDRAHULICAS", "ELECTRICOS", "ILUMINACION", "BAMACOLGROUP"]):
+            rfte_t = round(valor_base * 0.025, 2) if valor_base >= 1047000 else 0.0
+            rica_t = round(valor_base * 0.01104, 2) if valor_base >= 1414000 else 0.0
+            cta_rfte_b, cta_iva, cta_rica_b = "23654001", "24081001", "23680501"
+            if valor_base >= 500000:
+                cta_p, cta_c, desc = "14350101", "22050501", f"Repuestos / Inventario - {nombre_emisor[:25]}"
+                cat, razon_b = "Inventario", "Compra repuestos mayores a 500k"
             else:
-                df.at[idx_row, "Neto a Pagar"] = round(b_n + inc_n + iv_n - rf_n - ri_n - riv_n, 2)
-                df.at[idx_row, "Total Neto"] = round(b_n + inc_n + iv_n - rf_n - ri_n - riv_n, 2)
+                cta_p, cta_c, desc = "61800101", "23359501", f"Mantenimiento menor - {nombre_emisor[:25]}"
+                cat, razon_b = "Costo Mantenimiento", "Repuestos menores a 500k"
+                rfte_t, rica_t = 0.0, 0.0
+
+        # 3. Hoteles / Viajes
+        elif any(k in nombre for k in ["HOTEL", "ESTELAR", "GENOVA", "VITTAPARK"]):
+            rfte_t = round(valor_base * 0.035, 2) if valor_base >= 210000 else 0.0
+            rica_t = round(valor_base * 0.00966, 2) if valor_base >= 210000 else 0.0
+            cta_p, cta_c, desc = "51550501", "23359501", f"Alojamiento / Viaje - {nombre_emisor[:25]}"
+            cta_rfte_b, cta_iva, cta_rica_b = "23652501", "24081501", "23680505"
+            cat, razon_b = "Gasto Viaje", "Hospedaje de personal (IVA Servicios 24081501)"
+
+        # 4. Software Siigo
+        elif "SIIGO" in nombre:
+            cta_p, cta_c, desc = "51352001", "23359501", f"Software Siigo - {nombre_emisor[:25]}"
+            rfte_t, rica_t = 0.0, 0.0
+            cta_rfte_b, cta_iva, cta_rica_b = "", "24081501", ""
+            cat, razon_b = "Software", "Software y tecnologia (IVA Servicios 24081501)"
+            cat, razon_b = "Software", "Software y tecnologia"
+
+        # 5. Papeleria
+        elif any(k in nombre for k in ["PANAMERICANA", "LIBRERIA"]):
+            cta_p, cta_c, desc = "51953001", "23359501", f"Papeleria - {nombre_emisor[:25]}"
+            rfte_t, rica_t = 0.0, 0.0
+            cta_rfte_b, cta_iva, cta_rica_b = "", "24081001", ""
+            cat, razon_b = "Gastos Papeleria", "Utiles de oficina"
+
+        # 6. Compras y Gastos Generales
+        elif valor_base >= 500000:
+            rfte_t = round(valor_base * 0.025, 2) if valor_base >= 1047000 else 0.0
+            rica_t = round(valor_base * 0.01104, 2) if valor_base >= 1414000 else 0.0
+            cta_p, cta_c, desc = "14350101", "22050501", f"Compra mercancias - {nombre_emisor[:25]}"
+            cta_rfte_b, cta_iva, cta_rica_b = "23654001", "24081001", "23680501"
+            cat, razon_b = "Mercancia", "Compra general > 500k"
         else:
-            iv_tot_r = float(r_row.get("IVA", 0.0) or 0.0)
-            iv_5_r = float(r_row.get("IVA 5%", 0.0) or 0.0)
-            iv_19_r = float(r_row.get("IVA 19%", 0.0) or 0.0)
-            if iv_5_r <= 0 and iv_19_r <= 0 and iv_tot_r > 0:
-                df.at[idx_row, "IVA 19%"] = iv_tot_r
-                df.at[idx_row, "Base IVA 19%"] = float(r_row.get("Base", 0.0) or 0.0)
+            cta_p, cta_c, desc = "51959501", "23359501", f"Gastos generales - {nombre_emisor[:25]}"
+            rfte_t, rica_t = 0.0, 0.0
+            cta_rfte_b, cta_iva, cta_rica_b = "", "24081001", ""
+            cat, razon_b = "Gasto General", "Compra menor general"
 
-    return df
+        # CRUCE DE RESPONSABILIDADES FISCALES DIAN
+        es_emisor_gc = "O-13" in resp or "GRAN CONTRIBUYENTE" in resp
+        es_emisor_autorr = "O-15" in resp or "AUTORRETENEDOR" in resp or "SIIGO" in nombre
+        es_emisor_rst = "O-47" in resp or "SIMPLE" in resp
+        es_comprador_gc = empresa_compradora.get("es_gran_contribuyente", False)
 
-try:
+        # A. ReteFuente Renta
+        if es_emisor_autorr:
+            rfte = 0.0
+            cta_rfte = ""
+            razon_rfte = "Proveedor Autorretenedor (O-15): No aplica ReteFuente"
+        elif es_emisor_rst:
+            rfte = 0.0
+            cta_rfte = ""
+            razon_rfte = "Proveedor R\u00e9gimen Simple (O-47): No aplica ReteFuente (Art. 911 E.T.)"
+        else:
+            rfte = rfte_t
+            cta_rfte = cta_rfte_b if rfte > 0 else ""
+            razon_rfte = f"ReteFuente ordinaria (${rfte:,.2f})" if rfte > 0 else "Base no supera tope"
+
+        # B. ReteIVA (Art. 437-2 E.T.)
+        if es_emisor_gc and not es_comprador_gc:
+            reteiva = 0.0
+            razon_reteiva = "Emisor Gran Contribuyente (O-13): Comprador ordinario no practica ReteIVA"
+        elif es_emisor_rst:
+            reteiva = 0.0
+            razon_reteiva = "Emisor R\u00e9gimen Simple: Exento de ReteIVA"
+        elif es_comprador_gc and valor_iva > 0:
+            reteiva = round(valor_iva * 0.15, 2)
+            razon_reteiva = "Comprador Gran Contribuyente practica 15% de ReteIVA"
+        else:
+            reteiva = 0.0
+            razon_reteiva = "No aplica ReteIVA"
+
+        # C. ReteICA
+        if es_emisor_gc or es_emisor_autorr or es_emisor_rst:
+            rica = 0.0
+            cta_rica = ""
+            razon_rica = "Emisor GC / Autorretenedor: Exento de ReteICA territorial"
+        else:
+            rica = rica_t
+            cta_rica = cta_rica_b if rica > 0 else ""
+            razon_rica = f"ReteICA liquidado (${rica:,.2f})" if rica > 0 else "Base no supera tope"
+
+        if cta_aprendida:
+            cta_p = cta_aprendida
+            cat = f"Aprendido ({cta_aprendida})"
+            razon_total = f"\U0001f9e0 Cuenta aprendida de auditor\u00edas del usuario ({cta_aprendida}) | {razon_rfte} | {razon_reteiva}"
+        else:
+            razon_total = f"{razon_b} | {razon_rfte} | {razon_reteiva}"
+
+        audit_dict = {
+            "es_gc": es_emisor_gc,
+            "es_autorr": es_emisor_autorr,
+            "es_rst": es_emisor_rst,
+            "razon_rfte": razon_rfte,
+            "razon_reteiva": razon_reteiva,
+            "razon_reteica": razon_rica,
+            "razon_rica": razon_rica,
+            "es_aprendido": bool(cta_aprendida)
+        }
+        return t_comp, op, cta_p, cta_c, desc, rfte, rica, reteiva, cta_rfte, cta_iva, cta_rica, cat, razon_total, audit_dict
+
+
+
+    def desbloquear_pdf_bytes(fbytes, nit_receptor=None, claves_extra=None, nits_emisores=None):
+        """
+        Desbloquea autom\u00e1ticamente un PDF si viene encriptado/protegido con contrase\u00f1a.
+        Prueba el NIT de la empresa compradora (con/sin d\u00edgito), NITs de emisores,
+        contrase\u00f1a opcional y contrase\u00f1as est\u00e1ndar de facturaci\u00f3n electr\u00f3nica.
+        Retorna: (pdf_desbloqueado_bytes, fue_desbloqueado)
+        """
+        try:
+            reader = PdfReader(io.BytesIO(fbytes))
+            if not reader.is_encrypted:
+                return fbytes, True
+
+            claves = [""]
+            if claves_extra:
+                claves.append(str(claves_extra).strip())
+
+            if nit_receptor:
+                nr = re.sub(r"\D", "", str(nit_receptor))
+                if nr:
+                    claves.extend([nr, nr[:-1], f"{nr[:-1]}-{nr[-1]}", f"{nr}5", f"{nr}-5"])
+            claves.extend(["901346412", "9013464125", "901346412-5", "1234", "123456"])
+
+            if nits_emisores:
+                for ne in nits_emisores:
+                    c = re.sub(r"\D", "", str(ne))
+                    if c and len(c) >= 7:
+                        claves.append(c)
+
+            desencriptado = False
+            for pwd in claves:
+                try:
+                    res = reader.decrypt(pwd)
+                    if res in (1, 2) or not reader.is_encrypted:
+                        desencriptado = True
+                        break
+                except Exception:
+                    pass
+
+            if desencriptado:
+                writer = PdfWriter()
+                for p in reader.pages:
+                    writer.add_page(p)
+                out = io.BytesIO()
+                writer.write(out)
+                out.seek(0)
+                return out.getvalue(), True
+            else:
+                return fbytes, False
+        except Exception:
+            return fbytes, False
+
+    _MEM_TEXT_CACHE = {}
+
+    def cache_extraer_textos_pdf(fbytes, nit_receptor="9013464125"):
+        """Extrae el texto de todas las p\u00e1ginas de un PDF guardando en cach\u00e9 \u00fanicamente el texto liviano por hash MD5 (0 bytes de PDF retenidos en RAM)."""
+        if not fbytes:
+            return []
+        try:
+            h_key = f"{hashlib.md5(fbytes).hexdigest()}_{nit_receptor}"
+            if h_key in _MEM_TEXT_CACHE:
+                return _MEM_TEXT_CACHE[h_key]
+            reader = PdfReader(io.BytesIO(fbytes))
+            if reader.is_encrypted:
+                fbytes_des, ok = desbloquear_pdf_bytes(fbytes, nit_receptor=nit_receptor)
+                if ok:
+                    reader = PdfReader(io.BytesIO(fbytes_des))
+            res = [(p.extract_text() or "") for p in reader.pages]
+            if len(_MEM_TEXT_CACHE) > 250:
+                _MEM_TEXT_CACHE.clear()
+            _MEM_TEXT_CACHE[h_key] = res
+            return res
+        except Exception:
+            return []
+
+
+
+
+    def auditar_regimen_desde_facturas_renombradas(df_ref, dict_renombrados, empresa_dict):
+        """
+        Escanea el r\u00e9gimen fiscal Y los valores fiscales reales (Subtotal, IVA, Retenciones Sugeridas, Total Neto)
+        directamente de las facturas PDF ya desbloqueadas y renombradas.
+        Actualiza el R\u00e9gimen Fiscal Emisor Y recalcula las retenciones en la fuente correspondientes.
+        """
+        total_modificados = 0
+        if not dict_renombrados or df_ref.empty:
+            return total_modificados
+
+        for r_idx, r_mat in df_ref.iterrows():
+            soporte_nom = str(r_mat.get("Soporte PDF Renombrado", ""))
+            pdf_bytes = dict_renombrados.get(soporte_nom)
+
+            # Busqueda por coincidencia de comprobante o folio si el nombre vario ligeramente
+            if not pdf_bytes:
+                comp_id = str(r_mat.get("Comprobante Siigo", "")).replace(" ", "_")
+                fol_id = str(r_mat.get("Folio", ""))
+                for k in list(dict_renombrados.keys()):
+                    if comp_id and comp_id in k:
+                        pdf_bytes = dict_renombrados[k]
+                        break
+                    elif fol_id and len(fol_id) >= 3 and fol_id in k:
+                        pdf_bytes = dict_renombrados[k]
+                        break
+
+            if pdf_bytes:
+                try:
+                    paginas = cache_extraer_textos_pdf(pdf_bytes, nit_receptor=empresa_dict.get("nit", "9013464125"))
+                    txt_completo = chr(10).join(paginas)
+
+                    # 1. Escanear valores fiscales y totales desde el PDF
+                    val_fisc = extraer_valores_fiscales_texto_pdf(txt_completo)
+                    hubo_cambio = False
+
+                    if val_fisc.get("subtotal") and val_fisc["subtotal"] > 0:
+                        df_ref.at[r_idx, "Base"] = val_fisc["subtotal"]
+                        hubo_cambio = True
+
+                    if val_fisc.get("iva") is not None and val_fisc["iva"] >= 0:
+                        if val_fisc["iva"] > 0:
+                            df_ref.at[r_idx, "IVA"] = val_fisc["iva"]
+                        df_ref.at[r_idx, "IVA 19%"] = val_fisc.get("iva_19", val_fisc["iva"])
+                        df_ref.at[r_idx, "IVA 5%"] = val_fisc.get("iva_5", 0.0)
+                        df_ref.at[r_idx, "Base IVA 19%"] = val_fisc.get("base_iva_19", 0.0)
+                        df_ref.at[r_idx, "Base IVA 5%"] = val_fisc.get("base_iva_5", 0.0)
+                        if val_fisc.get("iva_5", 0.0) > 0:
+                            df_ref.at[r_idx, "Cta IVA 5%"] = "24081003"
+                        hubo_cambio = True
+
+                    if val_fisc.get("inc_otros") and val_fisc["inc_otros"] > 0:
+                        df_ref.at[r_idx, "INC / Otros Impuestos"] = val_fisc["inc_otros"]
+                        hubo_cambio = True
+
+                    # 2. Escaneo de regimen fiscal del emisor
+                    nit_emisor_val = r_mat.get("NIT Emisor")
+                    reg_detectado = escanear_regimen_texto_pdf(txt_completo, nit_emisor=nit_emisor_val)
+
+                    if not reg_detectado:
+                        ne_dig = re.sub(r'\D', '', str(nit_emisor_val))
+                        if ne_dig in REGIMENES_EMISORES_CONOCIDOS:
+                            reg_detectado = REGIMENES_EMISORES_CONOCIDOS[ne_dig]
+                        elif any(k in str(r_mat.get("Proveedor", "")).upper() for k in ["DHL", "ESTELAR", "BUENAVENTURA", "SIIGO", "COMCEL", "CLARO", "PANAMERICANA"]):
+                            reg_detectado = "O-13;O-15"
+
+                    if reg_detectado and reg_detectado != r_mat.get("R\u00e9gimen Fiscal Emisor"):
+                        df_ref.at[r_idx, "R\u00e9gimen Fiscal Emisor"] = reg_detectado
+                        hubo_cambio = True
+
+                    # 3. Recalcular liquidacion de retenciones con el nuevo regimen y concepto extraido
+                    concep_det = val_fisc.get("concepto_items", "")
+                    if concep_det:
+                        df_ref.at[r_idx, "Descripcion"] = concep_det
+                    desc_para_clasif = concep_det or str(df_ref.at[r_idx, "Descripcion"])
+                    reg_a_usar = df_ref.at[r_idx, "R\u00e9gimen Fiscal Emisor"]
+                    t_c_n, op_n, c_p_n, c_c_n, desc_n, rfte_n, rica_n, riva_n, c_rf_n, c_iv_n, c_ri_n, cat_n, razon_n, audit_n = clasificar_factura(
+                        df_ref.at[r_idx, "NIT Emisor"], df_ref.at[r_idx, "Proveedor"],
+                        df_ref.at[r_idx, "Base"], df_ref.at[r_idx, "IVA"],
+                        df_ref.at[r_idx, "Operacion"], reg_a_usar, empresa_dict,
+                        descripcion=desc_para_clasif
+                    )
+                    df_ref.at[r_idx, "Categor\u00eda"] = cat_n
+                    df_ref.at[r_idx, "Cta Principal"] = c_p_n
+
+                    # Si el PDF trae retenciones sugeridas explicitas en notas
+                    if val_fisc.get("retefuente") is not None and val_fisc["retefuente"] > 0:
+                        df_ref.at[r_idx, "ReteFuente"] = val_fisc["retefuente"]
+                    else:
+                        df_ref.at[r_idx, "ReteFuente"] = rfte_n
+
+                    if val_fisc.get("reteica") is not None and val_fisc["reteica"] > 0:
+                        df_ref.at[r_idx, "ReteICA"] = val_fisc["reteica"]
+                    else:
+                        df_ref.at[r_idx, "ReteICA"] = rica_n
+
+                    df_ref.at[r_idx, "ReteIVA"] = riva_n
+                    df_ref.at[r_idx, "Cta ReteFuente"] = c_rf_n
+                    df_ref.at[r_idx, "Cta ReteICA"] = c_ri_n
+                    df_ref.at[r_idx, "Raz\u00f3n Contable"] = razon_n
+                    df_ref.at[r_idx, "Audit Info"] = audit_n
+
+                    # 4. Tratamiento para Agencias Aduaneras / Facturas de Mandato
+                    prov_nom_u = str(df_ref.at[r_idx, "Proveedor"]).upper()
+                    es_aduanero_row = any(k in prov_nom_u for k in ["CARGO", "ADUANA", "PORTUARIA", "ALMACENADORA", "TERMINAL", "DHL", "EURO SHIPPING", "TRADE GLOBAL"])
+
+                    if es_aduanero_row or val_fisc.get("retefuente", 0) > 0:
+                        df_ref.at[r_idx, "Impuestos Asumidos"] = True
+                        saldo_cruce = round(df_ref.at[r_idx, "Base"] + df_ref.at[r_idx, "IVA"], 2)
+                        df_ref.at[r_idx, "Neto a Pagar"] = saldo_cruce
+                        if "CARGO" in prov_nom_u:
+                            df_ref.at[r_idx, "Cuenta Pasivo Especifica"] = "22050505"
+                            df_ref.at[r_idx, "Cta Contrapartida"] = "22050505"
+                        elif "DHL" in prov_nom_u:
+                            df_ref.at[r_idx, "Cuenta Pasivo Especifica"] = "23359501"
+                            df_ref.at[r_idx, "Cta Contrapartida"] = "23359501"
+                    else:
+                        df_ref.at[r_idx, "Neto a Pagar"] = round(df_ref.at[r_idx, "Total"] - df_ref.at[r_idx, "ReteFuente"] - df_ref.at[r_idx, "ReteICA"] - df_ref.at[r_idx, "ReteIVA"], 2)
+
+                    if hubo_cambio:
+                        total_modificados += 1
+                except Exception as e:
+                    pass
+
+        return total_modificados
+
+    def identificar_factura_en_texto(texto, df_ref):
+        """
+        Motor de b\u00fasqueda ultra-r\u00e1pido (130x m\u00e1s veloz):
+        Eval\u00faa CUFE, Prefijo, Folio, NIT Emisor y Proveedor sin crear objetos pesados en bucles.
+        """
+        if not texto or df_ref.empty:
+            return None
+        txt_clean = re.sub(r'[^A-Z0-9]', '', texto.upper())
+        digits_only = re.sub(r'\D', '', texto)
+
+        # 1. Busqueda directa por CUFE (Certeza 100%)
+        for r_idx, r_cand in df_ref.iterrows():
+            c_val = str(r_cand.get("CUFE", "") or r_cand.get("CUFE / Token", "") or "")
+            if len(c_val) >= 15:
+                c_clean = re.sub(r'[^A-Za-z0-9]', '', c_val).upper()
+                if c_clean[:20] in txt_clean:
+                    return r_cand
+
+        # 2. Busqueda combinada Factura + NIT (Ultra-rapida)
+        mejor_cand = None
+        mejor_score = 0
+
+        for r_idx, r_cand in df_ref.iterrows():
+            pref = str(r_cand.get("Prefijo", "") or "").strip().upper()
+            fol = str(r_cand.get("Folio", "") or "").strip().upper()
+            if not fol or fol == "NAN":
+                continue
+            pref_c = re.sub(r'[^A-Z0-9]', '', pref)
+            fol_c = re.sub(r'[^A-Z0-9]', '', fol)
+            fac_full = (pref_c + fol_c) if pref_c else fol_c
+            fol_sc = fol_c.lstrip('0')
+            fac_full_sc = (pref_c + fol_sc) if pref_c else fol_sc
+
+            has_fac = (len(fac_full) >= 3 and fac_full in txt_clean) or (len(fac_full_sc) >= 3 and fac_full_sc in txt_clean)
+            if not has_fac and len(fol_c) >= 3:
+                if fol_c in txt_clean:
+                    has_fac = True
+
+            if not has_fac:
+                continue
+
+            nit_c = re.sub(r'\D', '', str(r_cand.get("NIT Emisor", "")))
+            nit_base = nit_c[:-1] if len(nit_c) >= 10 else nit_c
+            has_nit = (nit_c and len(nit_c) >= 6 and nit_c in digits_only) or (nit_base and len(nit_base) >= 6 and nit_base in digits_only)
+
+            prov_clean = re.sub(r'[^A-Z0-9]', '', str(r_cand.get("Proveedor", "")).upper())
+            has_prov = len(prov_clean) >= 4 and prov_clean[:8] in txt_clean
+
+            score = 600 if has_nit else (450 if has_prov else 300)
+            if score > mejor_score:
+                mejor_score = score
+                mejor_cand = r_cand
+                if score == 600:
+                    break
+
+            if score > mejor_score and score >= 300:
+                mejor_score = score
+                mejor_cand = r_cand
+
+        return mejor_cand
+
+    def buscar_y_extraer_pdf(fac_sel, dict_renombrados=None, dict_originales=None, empresa_compradora=None):
+        """
+        Busca y extrae el PDF de la factura seleccionada dando M\u00c1XIMA PRIORIDAD
+        a las facturas YA DESBLOQUEADAS, SEPARADAS Y RENOMBRADAS (dict_renombrados):
+        1. PRIORIDAD 1: Facturas en dict_renombrados (las que ya pasaron por el proceso de desbloqueo y renombrado).
+           Coincidencia por nombre esperado (Comp_10-XXX...), comprobante, folio o CUFE.
+        2. PRIORIDAD 2: Si a\u00fan no se han desbloqueado/renombrado, buscar en dict_originales y desbloquearlas al vuelo.
+        Retorna: (pdf_bytes_desbloqueado, descripcion_origen, lista_paginas)
+        """
+        comp_siigo = str(fac_sel.get("Comprobante Siigo", "")).strip()
+        consecutivo = str(fac_sel.get("Consecutivo", "")).strip()
+        t_comp = str(fac_sel.get("Tipo Comp", "")).strip()
+
+        folio_clean = str(fac_sel.get("Folio", "")).replace("-", "").strip().upper()
+        folio_sc = folio_clean.lstrip("0")
+        pref_clean = str(fac_sel.get("Prefijo", "")).replace("-", "").strip().upper()
+        fac_clean = str(fac_sel.get("Factura", "")).replace("-", "").strip().upper()
+        fac_full = (pref_clean + folio_clean) if pref_clean else folio_clean
+        fac_full_sc = (pref_clean + folio_sc) if pref_clean else folio_sc
+
+        cufe_raw = str(fac_sel.get("CUFE", "") or fac_sel.get("CUFE / Token", "") or "").strip()
+        cufe_clean = re.sub(r'[^a-zA-Z0-9]', '', cufe_raw).lower()
+
+        # El NIT receptor es el de la empresa compradora
+        nit_comprador = "9013464125"
+        if empresa_compradora:
+            nit_comprador = re.sub(r"\D", "", str(empresa_compradora.get("nit", "9013464125")))
+
+        nit_emisor_digits = re.sub(r"\D", "", str(fac_sel.get("NIT Emisor", "")))
+        soporte_nom = str(fac_sel.get("Soporte PDF Renombrado", "")).strip()
+        df_una_fac = pd.DataFrame([fac_sel])
+
+        # =========================================================================
+        # PRIORIDAD 1: TOMAR LAS FACTURAS DESPUES DE DESBLOQUEARLAS Y RENOMBRARLAS
+        # =========================================================================
+        if dict_renombrados:
+            # A. Coincidencia exacta por el nombre de archivo asignado
+            if soporte_nom and soporte_nom in dict_renombrados:
+                f_bytes = dict_renombrados[soporte_nom]
+                f_des, _ = desbloquear_pdf_bytes(f_bytes, nit_receptor=nit_comprador)
+                return f_des, f"Factura Desbloqueada Oficial ({soporte_nom})", None
+
+            # B. Coincidencia por Comprobante (ej. Comp_10-680 o 10-680)
+            comp_patterns = [
+                f"Comp_{t_comp}-{consecutivo}".upper(),
+                f"Comp_{t_comp}_{consecutivo}".upper(),
+                f"{t_comp}-{consecutivo}".upper(),
+                f"{t_comp}_{consecutivo}".upper()
+            ]
+            for k in list(dict_renombrados.keys()):
+                k_u = k.upper().replace(" ", "_")
+                if any(cp in k_u for cp in comp_patterns):
+                    f_des, _ = desbloquear_pdf_bytes(dict_renombrados[k], nit_receptor=nit_comprador)
+                    return f_des, f"Factura Desbloqueada Oficial ({k})", None
+
+            # C. Coincidencia por Numero de Factura / Folio en el nombre renombrado
+            for k in list(dict_renombrados.keys()):
+                k_clean = k.replace("-", "").replace(" ", "").replace("_", "").upper()
+                if fac_full and len(fac_full) >= 3 and fac_full in k_clean:
+                    f_des, _ = desbloquear_pdf_bytes(dict_renombrados[k], nit_receptor=nit_comprador)
+                    return f_des, f"Factura Desbloqueada Oficial ({k})", None
+                if folio_clean and len(folio_clean) >= 3 and folio_clean in k_clean:
+                    f_des, _ = desbloquear_pdf_bytes(dict_renombrados[k], nit_receptor=nit_comprador)
+                    return f_des, f"Factura Desbloqueada Oficial ({k})", None
+
+            # D. Coincidencia por CUFE en el nombre renombrado
+            if cufe_clean and len(cufe_clean) >= 15:
+                for k in list(dict_renombrados.keys()):
+                    k_l = re.sub(r'[^a-zA-Z0-9]', '', k).lower()
+                    if cufe_clean[:20] in k_l:
+                        f_des, _ = desbloquear_pdf_bytes(dict_renombrados[k], nit_receptor=nit_comprador)
+                        return f_des, f"Factura Desbloqueada Oficial ({k})", None
+
+            # E. Verificacion por contenido de texto en las facturas renombradas
+            for r_nom, r_bytes in dict_renombrados.items():
+                try:
+                    pgs = cache_extraer_textos_pdf(r_bytes, nit_receptor=nit_comprador)
+                    txt_r = " ".join(pgs)
+                    if identificar_factura_en_texto(txt_r, df_una_fac) is not None:
+                        f_des, _ = desbloquear_pdf_bytes(r_bytes, nit_receptor=nit_comprador)
+                        return f_des, f"Factura Desbloqueada por Contenido ({r_nom})", None
+                except Exception:
+                    pass
+
+        # =========================================================================
+        # PRIORIDAD 2: SI AUN NO SE HA RENOMBRADO, BUSCAR EN LOS ORIGINALES Y DESBLOQUEAR
+        # =========================================================================
+        if dict_originales:
+            # A. Busqueda por CUFE en nombre de archivo original
+            if cufe_clean and len(cufe_clean) >= 15:
+                for fname, fbytes in dict_originales.items():
+                    fn_l = re.sub(r'[^a-zA-Z0-9]', '', fname).lower()
+                    if cufe_clean[:20] in fn_l or fn_l.startswith(cufe_clean[:18]):
+                        f_des, _ = desbloquear_pdf_bytes(fbytes, nit_receptor=nit_comprador)
+                        return f_des, f"Factura Desbloqueada DIAN ({fname[:20]}...pdf)", None
+
+            # B. Archivos originales individuales por coincidencia de texto
+            for fname, fbytes in dict_originales.items():
+                try:
+                    f_des, _ = desbloquear_pdf_bytes(fbytes, nit_receptor=nit_comprador)
+                    pgs = cache_extraer_textos_pdf(f_des, nit_receptor=nit_comprador)
+                    txt_ind = " ".join(pgs)
+                    if identificar_factura_en_texto(txt_ind, df_una_fac) is not None:
+                        return f_des, f"Factura Desbloqueada ({fname})", None
+                except Exception:
+                    pass
+
+            # C. Escaneo en PDFs originales unificados/consolidados pagina por pagina
+            for fname, fbytes in dict_originales.items():
+                try:
+                    f_des, _ = desbloquear_pdf_bytes(fbytes, nit_receptor=nit_comprador)
+                    paginas_txt = cache_extraer_textos_pdf(f_des, nit_receptor=nit_comprador)
+                    pags_coincidentes = []
+                    for p_idx, txt in enumerate(paginas_txt):
+                        if identificar_factura_en_texto(txt, df_una_fac) is not None:
+                            if p_idx not in pags_coincidentes:
+                                pags_coincidentes.append(p_idx)
+                            m_p = re.search('(?:P[\u00c1A\u00e1a]G(?:INA)?|HOJA|PAGE)\\s*[:\\.]?\\s*1\\s*(?:DE|/|OF)\\s*(\\d+)', txt, re.IGNORECASE)
+                            if m_p:
+                                try:
+                                    total_h = int(m_p.group(1))
+                                    if 2 <= total_h <= 15:
+                                        for off in range(1, total_h):
+                                            p_next = p_idx + off
+                                            if p_next < len(paginas_txt) and p_next not in pags_coincidentes:
+                                                pags_coincidentes.append(p_next)
+                                except Exception:
+                                    pass
+
+                    if pags_coincidentes:
+                        reader = PdfReader(io.BytesIO(f_des))
+                        writer = PdfWriter()
+                        for p in pags_coincidentes:
+                            writer.add_page(reader.pages[p])
+                        out = io.BytesIO()
+                        writer.write(out)
+                        out.seek(0)
+                        str_p = ", ".join([str(p+1) for p in pags_coincidentes])
+                        return out.getvalue(), f"Factura Desbloqueada de '{fname}' (P\u00e1gs {str_p})", [p+1 for p in pags_coincidentes]
+                except Exception:
+                    pass
+
+        return None, None, None
+
+
+    def renderizar_visor_pdf_completo(pdf_bytes, nombre_archivo, fac_sel=None, key_prefix="pdf_view", nit_comprador="9013464125"):
+        """
+        Visor oficial 100% blindado y garantizado:
+        1. Desbloquea y desencripta el PDF primero para que no pida contrase\u00f1a.
+        2. Renderizado de alta definici\u00f3n nativo en im\u00e1genes mediante pypdfium2 (CERO caras tristes \U0001f4c4\U0001f641, CERO bloqueos de Chrome).
+        3. Bot\u00f3n para abrir a pantalla completa en pesta\u00f1a nueva y bot\u00f3n de descarga directa.
+        4. Cuadro formal con resumen contable de la factura.
+        """
+        if not pdf_bytes or not isinstance(pdf_bytes, (bytes, bytearray)):
+            st.error("\u26a0\ufe0f El archivo PDF no contiene datos v\u00e1lidos.")
+            return
+
+        # 1. Desbloquear el PDF para garantizar que este 100% libre de contrasena
+        pdf_limpio, _ = desbloquear_pdf_bytes(pdf_bytes, nit_receptor=nit_comprador)
+        pdf_usar = pdf_limpio if pdf_limpio else pdf_bytes
+
+        try:
+            reader_prev = PdfReader(io.BytesIO(pdf_usar))
+            num_pags_tot = len(reader_prev.pages)
+        except Exception:
+            num_pags_tot = 1
+
+        # Pre-calculo seguro de variables para evitar cualquier error de formato
+        val_base = float(fac_sel.get("Base", 0.0)) if (fac_sel is not None and "Base" in fac_sel) else 0.0
+        val_tot = float(fac_sel.get("Total", 0.0)) if (fac_sel is not None and "Total" in fac_sel) else 0.0
+        val_iva = float(fac_sel.get("IVA", 0.0)) if (fac_sel is not None and "IVA" in fac_sel) else 0.0
+        val_rfte = float(fac_sel.get("ReteFuente", 0.0)) if (fac_sel is not None and "ReteFuente" in fac_sel) else 0.0
+        fac_num_str = str(fac_sel.get("Factura", "")) if fac_sel is not None else nombre_archivo
+        prov_str = str(fac_sel.get("Proveedor", "")) if fac_sel is not None else ""
+        nit_str = str(fac_sel.get("NIT Emisor", "")) if fac_sel is not None else ""
+        comp_str = str(fac_sel.get("Comprobante Siigo", "")) if fac_sel is not None else ""
+        fecha_str = str(fac_sel.get("Fecha", "")) if fac_sel is not None else ""
+        reg_str = str(fac_sel.get("R\u00e9gimen Fiscal Emisor", "O-48")) if fac_sel is not None else "O-48"
+
+        # 2. BOTON SUPERIOR DE DESCARGA Y SELECTOR DE TAMANO VISUAL
+        c_btn1, c_tam1 = st.columns([1.4, 2.6])
+        with c_btn1:
+            pags_label = f"{num_pags_tot} p\u00e1gina{'s' if num_pags_tot > 1 else ''} completa{'s' if num_pags_tot > 1 else ''}"
+            st.download_button(
+                label=f"\U0001f4e5 Descargar / Abrir PDF ({pags_label})",
+                data=pdf_usar,
+                file_name=nombre_archivo,
+                mime="application/pdf",
+                key=f"btn_dl_univ_{key_prefix}",
+                use_container_width=True
+            )
+        with c_tam1:
+            tam_sel = st.radio(
+                "\U0001f4d0 Tama\u00f1o de Vista Previa:",
+                ["\U0001f4c4 Normal (Recomendado - 780px)", "\U0001f50d Grande (Ancho Completo)", "\U0001f4f1 Compacto (600px)"],
+                horizontal=True,
+                index=0,
+                key=f"rad_tam_pdf_{key_prefix}"
+            )
+
+        # Proporcion de columnas para centrar y mostrar la hoja en tamano normal de lectura
+        if "Compacto" in tam_sel:
+            col_ratios = [2.2, 4.0, 2.2]
+        elif "Grande" in tam_sel:
+            col_ratios = [0.01, 9.98, 0.01]
+        else:  # Normal (Recomendado)
+            col_ratios = [1.6, 5.2, 1.6]
+
+        # 3. RENDERIZADO VISUAL DIRECTO EN IMAGENES NATIVAS CON LIBERACION ESTRICTA DE MEMORIA RAM
+        imgs_paginas = []
+        if HAS_PDFIUM:
+            doc_p = None
+            try:
+                doc_p = pdfium.PdfDocument(pdf_usar)
+                max_p_render = min(len(doc_p), 4)
+                for idx_pg in range(max_p_render):
+                    pg_obj = doc_p[idx_pg]
+                    bmp_obj = pg_obj.render(scale=1.2)
+                    imgs_paginas.append(bmp_obj.to_pil())
+                    bmp_obj.close()
+                    pg_obj.close()
+            except Exception:
+                imgs_paginas = []
+            finally:
+                if doc_p is not None:
+                    try:
+                        doc_p.close()
+                    except Exception:
+                        pass
+
+        if imgs_paginas:
+            for idx_p, img in enumerate(imgs_paginas):
+                c_l, c_mid, c_r = st.columns(col_ratios)
+                with c_mid:
+                    st.markdown(f"""
+                    <div style="background:#0070ba; color:white; padding:8px 14px; border-radius:6px 6px 0 0; font-weight:600; font-size:13.5px; display:flex; justify-content:space-between; align-items:center; margin-top:16px; box-shadow: 0 2px 4px rgba(0,0,0,0.06);">
+                        <span>\U0001f4c4 Factura: {fac_num_str} \u2014 {prov_str}</span>
+                        <span style="background:rgba(255,255,255,0.25); padding:2px 10px; border-radius:10px; font-size:12px;">Hoja {idx_p + 1} de {len(imgs_paginas)}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    st.image(img, use_container_width=True)
+        else:
+            # Fallback a Canvas HTML5 si pypdfium no estuviera disponible
+            visor_height = max(680, min(3600, num_pags_tot * 850))
+            html_canvas_viewer = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="utf-8">
+              <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+              <style>
+                body {{
+                  margin: 0;
+                  padding: 10px;
+                  background: #f1f5f9;
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                }}
+                .page-card {{
+                  margin-bottom: 18px;
+                  background: white;
+                  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+                  border-radius: 6px;
+                  overflow: hidden;
+                  width: 100%;
+                  max-width: 860px;
+                  border: 1px solid #cbd5e1;
+                }}
+                .page-title {{
+                  background: #0070ba;
+                  color: white;
+                  padding: 8px 14px;
+                  font-size: 13px;
+                  font-weight: 600;
+                  display: flex;
+                  justify-content: space-between;
+                  align-items: center;
+                }}
+                canvas {{
+                  display: block;
+                  width: 100%;
+                  height: auto;
+                }}
+                #msg {{
+                  font-size: 14px;
+                  color: #0284c7;
+                  padding: 20px;
+                  text-align: center;
+                  font-weight: 600;
+                }}
+              </style>
+            </head>
+            <body>
+              <div id="msg">\u23f3 Cargando y renderizando factura ({num_pags_tot} p\u00e1gina(s))...</div>
+              <div id="pages-container" style="width: 100%; display: flex; flex-direction: column; align-items: center;"></div>
+              <script>
+                (async function() {{
+                  try {{
+                    const b64 = "{b64_pdf}";
+                    const raw = atob(b64);
+                    const uint8Array = new Uint8Array(raw.length);
+                    for (let i = 0; i < raw.length; i++) {{
+                      uint8Array[i] = raw.charCodeAt(i);
+                    }}
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+                    const pdf = await pdfjsLib.getDocument({{ data: uint8Array }}).promise;
+                    document.getElementById('msg').style.display = 'none';
+                    const container = document.getElementById('pages-container');
+
+                    for (let num = 1; num <= pdf.numPages; num++) {{
+                      const page = await pdf.getPage(num);
+                      const viewport = page.getViewport({{ scale: 1.5 }});
+                      const card = document.createElement('div');
+                      card.className = 'page-card';
+                      const title = document.createElement('div');
+                      title.className = 'page-title';
+                      title.innerHTML = '<span>\U0001f4c4 {nombre_archivo}</span><span style="background:rgba(255,255,255,0.25); padding:2px 8px; border-radius:10px; font-size:11px;">Hoja ' + num + ' de ' + pdf.numPages + '</span>';
+                      card.appendChild(title);
+                      const canvas = document.createElement('canvas');
+                      const ctx = canvas.getContext('2d');
+                      canvas.height = viewport.height;
+                      canvas.width = viewport.width;
+                      card.appendChild(canvas);
+                      container.appendChild(card);
+                      await page.render({{ canvasContext: ctx, viewport: viewport }}).promise;
+                    }}
+                  }} catch (err) {{
+                    document.getElementById('msg').innerHTML = '<div style="background:white; padding:20px; border-radius:8px; border:2px solid #0070ba; text-align:center;"><h4>\U0001f4c4 Factura Lista</h4><p style="color:#64748b;">Utiliza el bot\u00f3n de descarga o abrir en otra ventana.</p></div>';
+                  }}
+                }})();
+              </script>
+            </body>
+            </html>
+            """
+            components.html(html_canvas_viewer, height=visor_height, scrolling=True)
+
+        # 4. CUADRO RESUMEN OFICIAL CON VALORES CONTABLES
+        st.markdown(f"""
+        <div style="background: white; border: 1px solid #cbd5e1; border-radius: 8px; padding: 18px; margin-top: 14px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13.5px; color: #334155;">
+                <div><b>Proveedor:</b> {prov_str} (NIT: {nit_str})<br><b>Factura:</b> {fac_num_str} ({comp_str})</div>
+                <div><b>Fecha Emisi\u00f3n:</b> {fecha_str} | <b>R\u00e9gimen:</b> {reg_str}<br><b>Base:</b> ${val_base:,.2f} | <b>IVA:</b> ${val_iva:,.2f} | <b>Total:</b> <span style="font-weight:bold; color:#0f172a;">${val_tot:,.2f}</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+
+
+
+
+
+
+    # (Funciones de autosave reubicadas limpiamente al inicio)
+
+
+    def extraer_montos_items_pdf(pdf_bytes):
+        """Extrae valores monetarios de los \u00edtems o detalles de productos en el PDF de una factura."""
+        if not pdf_bytes:
+            return []
+        try:
+            textos = cache_extraer_textos_pdf(pdf_bytes)
+            full_txt = " ".join(textos)
+            montos = []
+            encontrados = re.findall(r'(?:[\$]|(?:\s))\s*(\d{1,3}(?:\.\d{3})+(?:,\d{2})?)', full_txt)
+            for m in encontrados:
+                try:
+                    val = float(m.replace(".", "").replace(",", "."))
+                    if 20000 <= val <= 100000000:
+                        montos.append(val)
+                except Exception:
+                    pass
+            return list(set(montos))
+        except Exception:
+            return []
+
+    def generar_respaldo_portatil_bytes(empresa_dict):
+        """Genera en memoria un archivo .indumaq (ZIP completo) con el progreso actual de auditor\u00eda y triangulaci\u00f3n."""
+        if "df_procesado" not in st.session_state or st.session_state["df_procesado"] is None:
+            return None
+        try:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                # 1. df_procesado
+                zf.writestr("df_procesado.pkl", pickle.dumps(st.session_state["df_procesado"]))
+
+                # 2. excel_bytes
+                if st.session_state.get("excel_bytes"):
+                    zf.writestr("excel_original.xlsx", st.session_state["excel_bytes"])
+
+                # 3. paquetes_importacion
+                if "paquetes_importacion" in st.session_state and st.session_state["paquetes_importacion"]:
+                    zf.writestr("paquetes_importacion.pkl", pickle.dumps(st.session_state["paquetes_importacion"]))
+
+                # 4. asientos_triangulacion
+                if "asientos_triangulacion_por_factura" in st.session_state and st.session_state["asientos_triangulacion_por_factura"]:
+                    zf.writestr("asientos_triangulacion.pkl", pickle.dumps(st.session_state["asientos_triangulacion_por_factura"]))
+
+                # 5. estado_sesion
+                estado_flags = {
+                    "paquetes_listos": {k: v for k, v in st.session_state.items() if k.startswith("paquete_listo_")},
+                    "paquetes_destino_siigo": {k: v for k, v in st.session_state.items() if k.startswith("paquete_destino_siigo_")},
+                    "enviar_gp": {k: v for k, v in st.session_state.items() if k.startswith("enviar_gp_pq_")},
+                    "enviar_h2": {k: v for k, v in st.session_state.items() if k.startswith("enviar_h2_pq_")},
+                    "enviar_nd": {k: v for k, v in st.session_state.items() if k.startswith("enviar_nd_pq_")},
+                    "facturas_no_contabilizar": list(st.session_state.get("facturas_no_contabilizar", set())),
+                    "sel_paquete_activo_key": st.session_state.get("sel_paquete_activo_key", 1)
+                }
+                zf.writestr("estado_sesion.json", json.dumps(estado_flags, ensure_ascii=False, indent=2))
+
+                # 6. meta
+                now_str = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
+                meta = {
+                    "empresa": empresa_dict.get("nombre", "Empresa"),
+                    "nit": empresa_dict.get("nit", ""),
+                    "fecha_respaldo": now_str,
+                    "archivo_excel": st.session_state.get("excel_nombre", "Reporte.xlsx"),
+                    "total_facturas": len(st.session_state["df_procesado"])
+                }
+                zf.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
+                zf.writestr("meta_sesion.json", json.dumps(meta, ensure_ascii=False, indent=2))
+                mem_actual = cargar_memoria_aprendizaje(empresa_dict)
+                if mem_actual:
+                    zf.writestr("memoria_aprendizaje.json", json.dumps(mem_actual, ensure_ascii=False, indent=2))
+
+                # 7. Incluir 1 sola copia sin duplicar de los PDFs desbloqueados (ZIP_STORED directo desde disco) para conservar siempre la vista previa
+                d_renom_curr = st.session_state.get("dict_pdfs", {})
+                d_orig_curr = st.session_state.get("raw_uploaded_pdfs", {})
+                fuente_pdfs = d_renom_curr if (d_renom_curr and len(d_renom_curr) > 0) else d_orig_curr
+                if fuente_pdfs:
+                    for fn_k in list(fuente_pdfs.keys()):
+                        if not str(fn_k).lower().endswith(".pdf"):
+                            continue
+                        p_disk = fuente_pdfs.get_path(fn_k) if hasattr(fuente_pdfs, "get_path") else None
+                        arc_name = f"pdfs_renombrados/{os.path.basename(str(fn_k))}"
+                        if p_disk and os.path.exists(p_disk):
+                            zf.write(p_disk, arcname=arc_name, compress_type=zipfile.ZIP_STORED)
+                        else:
+                            b_pdf = fuente_pdfs.get(fn_k)
+                            if b_pdf:
+                                zinfo = zipfile.ZipInfo(arc_name)
+                                zinfo.compress_type = zipfile.ZIP_STORED
+                                zf.writestr(zinfo, b_pdf)
+
+            buf.seek(0)
+            return buf.getvalue()
+        except Exception:
+            return None
+
+    def restaurar_desde_respaldo_bytes(empresa_dict, raw_zip_or_file):
+        """Restaura un archivo de respaldo port\u00e1til (.indumaq o .zip) directamente a la sesi\u00f3n activa con facturas, paquetes y PDFs."""
+        try:
+            if hasattr(raw_zip_or_file, "seek"):
+                raw_zip_or_file.seek(0)
+                zf_source = raw_zip_or_file
+            elif isinstance(raw_zip_or_file, (bytes, bytearray)):
+                zf_source = io.BytesIO(raw_zip_or_file)
+            else:
+                zf_source = io.BytesIO(raw_zip_or_file.read())
+
+            with zipfile.ZipFile(zf_source, "r") as zf:
+                namelist = zf.namelist()
+                if "memoria_aprendizaje.json" in namelist:
+                    try:
+                        mem_rest = json.loads(zf.read("memoria_aprendizaje.json").decode("utf-8"))
+                        nit_emp = re.sub(r'\D', '', str(empresa_dict.get("nit", ""))) if empresa_dict else "global"
+                        os.makedirs(f"almacenamiento_contable/{nit_emp}", exist_ok=True)
+                        with open(f"almacenamiento_contable/{nit_emp}/memoria_aprendizaje_contable.json", "w", encoding="utf-8") as f_mem:
+                            json.dump(mem_rest, f_mem, ensure_ascii=False, indent=2)
+                        with open(PATH_MEMORIA_GLOBAL, "w", encoding="utf-8") as f_mem:
+                            json.dump(mem_rest, f_mem, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
+                if "df_procesado.pkl" in namelist:
+                    df_loaded = pickle.loads(zf.read("df_procesado.pkl"))
+                    st.session_state["df_procesado"] = normalizar_df_procesado(_limpiar_dtypes_pyarrow_df(df_loaded))
+                if "excel_original.xlsx" in namelist:
+                    st.session_state["excel_bytes"] = zf.read("excel_original.xlsx")
+                if "asientos_triangulacion.pkl" in namelist:
+                    as_loaded = pickle.loads(zf.read("asientos_triangulacion.pkl"))
+                    if isinstance(as_loaded, dict):
+                        for k_as, v_as in as_loaded.items():
+                            if isinstance(v_as, pd.DataFrame):
+                                as_loaded[k_as] = _limpiar_dtypes_pyarrow_df(v_as)
+                    st.session_state["asientos_triangulacion_por_factura"] = as_loaded
+                if "paquetes_importacion.pkl" in namelist:
+                    pqs_loaded = pickle.loads(zf.read("paquetes_importacion.pkl"))
+                    if isinstance(pqs_loaded, dict):
+                        as_map = st.session_state.get("asientos_triangulacion_por_factura", {})
+                        for pq_k, pq_v in pqs_loaded.items():
+                            if isinstance(pq_v, dict):
+                                if "terceros" in pq_v and isinstance(pq_v["terceros"], pd.DataFrame):
+                                    pq_v["terceros"] = _limpiar_dtypes_pyarrow_df(pq_v["terceros"])
+                                for af_k in ["asiento_fijo", "asiento_aprobado"]:
+                                    if af_k in pq_v and isinstance(pq_v[af_k], pd.DataFrame):
+                                        pq_v[af_k] = _limpiar_dtypes_pyarrow_df(pq_v[af_k])
+                                if ("asiento_fijo" in pq_v and pq_v["asiento_fijo"] is not None) or ("asiento_aprobado" in pq_v and pq_v["asiento_aprobado"] is not None):
+                                    st.session_state[f"paquete_listo_{pq_k}"] = True
+                                    st.session_state[f"asiento_fijo_pq_{pq_k}"] = pq_v.get("asiento_fijo", pq_v.get("asiento_aprobado")).copy()
+                                ag_fac_str = str(pq_v.get("agente", {}).get("Factura", "")).strip()
+                                if "destino_siigo" in pq_v and pq_v["destino_siigo"] is not None:
+                                    st.session_state[f"paquete_destino_siigo_{pq_k}"] = bool(pq_v["destino_siigo"])
+                                elif ag_fac_str and ag_fac_str in as_map:
+                                    st.session_state[f"paquete_destino_siigo_{pq_k}"] = True
+                                    pq_v["destino_siigo"] = True
+                        st.session_state["paquetes_importacion"] = pqs_loaded
+                        st.session_state["_ultimo_agentes_len"] = len(pqs_loaded)
+                if "estado_sesion.json" in namelist:
+                    est = json.loads(zf.read("estado_sesion.json").decode("utf-8"))
+                    for k, v in est.get("paquetes_listos", {}).items():
+                        st.session_state[k] = v
+                    for k, v in est.get("paquetes_destino_siigo", {}).items():
+                        st.session_state[k] = v
+                    for k, v in est.get("enviar_gp", {}).items():
+                        st.session_state[k] = v
+                    for k, v in est.get("enviar_h2", {}).items():
+                        st.session_state[k] = v
+                    for k, v in est.get("enviar_nd", {}).items():
+                        st.session_state[k] = v
+                    if "facturas_no_contabilizar" in est:
+                        st.session_state["facturas_no_contabilizar"] = set(est["facturas_no_contabilizar"])
+                    if "sel_paquete_activo_key" in est:
+                        st.session_state["sel_paquete_activo_key"] = est["sel_paquete_activo_key"]
+                        st.session_state["paquete_seleccionado_id"] = est["sel_paquete_activo_key"]
+                if "meta.json" in namelist:
+                    meta = json.loads(zf.read("meta.json").decode("utf-8"))
+                    st.session_state["excel_nombre"] = meta.get("archivo_excel", meta.get("excel_nombre", "Reporte.xlsx"))
+                    st.session_state["_sesion_cargada_nombre"] = f"Respaldo {meta.get('fecha_respaldo', '')}"
+                elif "meta_sesion.json" in namelist:
+                    meta = json.loads(zf.read("meta_sesion.json").decode("utf-8"))
+                    st.session_state["excel_nombre"] = meta.get("excel_nombre", meta.get("archivo_excel", "Reporte.xlsx"))
+                    st.session_state["_sesion_cargada_nombre"] = f"Respaldo {meta.get('fecha_respaldo', '')}"
+
+                # Restaurar PDFs directamente en disco por streaming (0 MB en RAM), evitando duplicar si ya existen renombrados
+                dict_renom = DiskBackedPDFDict("renom_pdfs")
+                dict_orig = DiskBackedPDFDict("raw_pdfs")
+                renom_names = [n for n in namelist if n.startswith("pdfs_renombrados/") and n.endswith(".pdf")]
+                orig_names = [n for n in namelist if n.startswith("pdfs_originales/") and n.endswith(".pdf")]
+                if renom_names:
+                    for name in renom_names:
+                        fn = os.path.basename(name)
+                        if fn:
+                            p_dst = dict_renom._safe_path(fn)
+                            try:
+                                z_sz = zf.getinfo(name).file_size
+                            except Exception:
+                                z_sz = -1
+                            if not (os.path.exists(p_dst) and z_sz > 0 and os.path.getsize(p_dst) == z_sz):
+                                with zf.open(name) as f_src, open(p_dst, "wb") as f_dst:
+                                    shutil.copyfileobj(f_src, f_dst)
+                            dict_renom[fn] = p_dst
+                elif orig_names:
+                    for name in orig_names:
+                        fn = os.path.basename(name)
+                        if fn:
+                            p_dst = dict_orig._safe_path(fn)
+                            try:
+                                z_sz = zf.getinfo(name).file_size
+                            except Exception:
+                                z_sz = -1
+                            if not (os.path.exists(p_dst) and z_sz > 0 and os.path.getsize(p_dst) == z_sz):
+                                with zf.open(name) as f_src, open(p_dst, "wb") as f_dst:
+                                    shutil.copyfileobj(f_src, f_dst)
+                            dict_orig[fn] = p_dst
+                if len(dict_renom) > 0:
+                    st.session_state["dict_pdfs"] = dict_renom
+                    st.session_state["total_zip_pdfs"] = len(dict_renom)
+                    st.session_state["raw_uploaded_pdfs"] = dict_renom
+                elif len(dict_orig) > 0:
+                    st.session_state["raw_uploaded_pdfs"] = dict_orig
+
+            st.session_state["_upl_reset_cnt"] = st.session_state.get("_upl_reset_cnt", 0) + 1
+            st.session_state.pop("_siigo_cache_sig", None)
+            st.session_state.pop("_siigo_3hojas_bytes", None)
+            guardar_estado_manual(empresa_dict)
+            import gc
+            gc.collect()
+            return True
+        except Exception as e:
+            st.session_state["_ultimo_error_respaldo"] = str(e)
+            return False
+
+    def normalizar_df_procesado(df):
+        """Garantiza que todas las columnas requeridas existan con tipos seguros y sin NaNs que causen ca\u00eddas."""
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return df
+        df = _limpiar_dtypes_pyarrow_df(df)
+    
+        defaults_str = {
+            "Comprobante Siigo": "Comp 10-001", "Fecha": "01/01/2026", "Factura": "FAC-001",
+            "Proveedor": "Proveedor", "NIT Emisor": "900000000", "R\u00e9gimen Fiscal Emisor": "48",
+            "Cta Principal": "14650501", "Categor\u00eda": "General", "Raz\u00f3n Contable": "Clasificaci\u00f3n autom\u00e1tica", "Cuenta Pasivo Especifica": "22050501",
+            "Cta Contrapartida": "22050501", "Operacion": "Compra", "Soporte PDF Renombrado": "",
+            "Descripcion": "Compra general", "Tipo Comp": "10", "Prefijo": "", "Folio": "",
+            "Cta ReteFuente": "23654001", "Cta ReteICA": "23680501", "Cta IVA": "24081001",
+            "Cta IVA 5%": "24081003", "Cta IVA Importaci\u00f3n": "240835", "Comprobante Previo": "", "Estado Registro": "\u26aa Compra Pendiente"
+        }
+        defaults_num = {
+            "Base": 0.0, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "Base IVA 19%": 0.0, "Base IVA 5%": 0.0,
+            "INC / Otros Impuestos": 0.0, "ReteFuente": 0.0, "ReteICA": 0.0, "ReteIVA": 0.0,
+            "Total": 0.0, "Neto a Pagar": 0.0, "Total Neto": 0.0, "Consecutivo": 680,
+            "IVA Importaci\u00f3n": 0.0
+        }
+        defaults_bool = {
+            "Impuestos Asumidos": False, "No Contabilizar": False, "Ya Registrada": False, "Es Aduanera": False
+        }
+
+        for col, def_val in defaults_str.items():
+            if col not in df.columns:
+                df[col] = def_val
+            else:
+                df[col] = df[col].fillna(def_val).astype(str).replace(["nan", "None"], def_val)
+
+        for col, def_val in defaults_num.items():
+            if col not in df.columns:
+                df[col] = def_val
+            else:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(def_val)
+
+        for col, def_val in defaults_bool.items():
+            if col not in df.columns:
+                df[col] = def_val
+            else:
+                df[col] = df[col].fillna(def_val).astype(bool)
+
+        if "Audit Info" not in df.columns:
+            df["Audit Info"] = [{} for _ in range(len(df))]
+
+        if df.attrs.get("_indumaq_norm_done") == len(df):
+            return df
+
+        # Auto-identificar y clasificar facturas de transporte terrestre / fletes / inland rate
+        REGEX_TRANSP = r'\b(TRANSPORTE|TRANSPORT|INLAND\s*RATE|INLAND|FLETE|FLETES|ACARREO|ACARREOS|CARGA\s*TERRESTRE|TERRESTRE|DRAYAGE|PORTES)\b'
+        for idx_row, r_row in df.iterrows():
+            f_num = str(r_row.get("Factura", "")).strip()
+            p_nom = str(r_row.get("Proveedor", "")).strip().upper()
+            d_val = str(r_row.get("Descripcion", "")).strip().upper()
+            c_val = str(r_row.get("Categor\u00eda", "")).strip().upper()
+
+            es_transp_row = ("70787" in f_num or
+                             re.search(REGEX_TRANSP, d_val, re.IGNORECASE) is not None or
+                             re.search(REGEX_TRANSP, c_val, re.IGNORECASE) is not None or
+                             ("EURO" in p_nom and any(k in d_val for k in ["INLAND", "TRANSPORT", "FLETE", "TERRESTRE"])))
+            if es_transp_row:
+                b_val = float(r_row.get("Base", 0.0) or 0.0)
+                if b_val > 0:
+                    rfte_correcta = round(b_val * 0.01, 2)
+                    rica_correcta = round(b_val * 0.00414, 2)
+                    if (df.at[idx_row, "Cta ReteFuente"] == "23652503" or
+                        df.at[idx_row, "ReteFuente"] == round(b_val * 0.04, 2) or
+                        df.at[idx_row, "ReteFuente"] == 0.0 or
+                        "70787" in f_num):
+                        df.at[idx_row, "ReteFuente"] = rfte_correcta
+                        df.at[idx_row, "ReteICA"] = rica_correcta
+                        df.at[idx_row, "Cta ReteFuente"] = "23652505"
+                        df.at[idx_row, "Cta ReteICA"] = "23680513"
+                        df.at[idx_row, "Categor\u00eda"] = "Transporte Carga (1%)"
+                        df.at[idx_row, "Raz\u00f3n Contable"] = "Transporte Terrestre de Carga / Fletes (1% ReteFuente [23652505] - 4.14\u2030 ReteICA [23680513])"
+                        df.at[idx_row, "Cta Principal"] = "14650501"
+                        df.at[idx_row, "Impuestos Asumidos"] = True
+                        df.at[idx_row, "Descripcion"] = "INLAND RATE TRANSPORTE TERRESTRE"
+
+        # Auto-sincronizar desglose oficial de facturas con IVA mixto (19% + 5%), Descuento en items, INC 8% y Bolsas
+        DESGLOSE_IMPUESTOS_PDF = {
+            "X928-2559678": {"Base": 250394.12, "IVA": 27275.88, "IVA 19%": 23833.03, "Base IVA 19%": 125436.97, "IVA 5%": 3442.85, "Base IVA 5%": 68857.15, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+            "US82-27381":   {"Base": 186911.15, "IVA": 22870.85, "IVA 19%": 21154.18, "Base IVA 19%": 111337.79, "IVA 5%": 1716.67, "Base IVA 5%": 34333.33, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+            "ES03-20573":   {"Base": 831867.00, "IVA": 115452.00, "IVA 19%": 111297.00, "Base IVA 19%": 585773.68, "IVA 5%": 4155.00, "Base IVA 5%": 83100.00, "INC / Otros Impuestos": 0.0},
+            "UJ06-24255":   {"Base": 216771.65, "IVA": 25425.35, "IVA 19%": 22397.97, "Base IVA 19%": 117884.05, "IVA 5%": 3027.38, "Base IVA 5%": 60547.62, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+            "US82-52479":   {"Base": 172128.12, "IVA": 19202.88, "IVA 19%": 17157.64, "Base IVA 19%": 90303.37, "IVA 5%": 2045.24, "Base IVA 5%": 40904.76, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+            "FBOG-385674":  {"Base": 110096.78, "IVA": 20918.39, "IVA 19%": 20918.39, "Base IVA 19%": 110096.78, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+            "X408-2540769": {"Base": 3399957.22, "IVA": 589012.78, "IVA 19%": 589012.78, "Base IVA 19%": 3100067.22, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+            "94-1527950":   {"Base": 2060371.00, "IVA": 0.0, "IVA 19%": 0.0, "Base IVA 19%": 0.0, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+            "04E-612027":   {"Base": 433784.03, "IVA": 76642.97, "IVA 19%": 76642.97, "Base IVA 19%": 403384.03, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 73.00, "Regimen": "O-13;O-15"},
+            "HG1-16542":    {"Base": 476296.30, "IVA": 62700.00, "IVA 19%": 62700.00, "Base IVA 19%": 330000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 11703.70},
+            "HG1-17107":    {"Base": 1037222.21, "IVA": 129200.00, "IVA 19%": 129200.00, "Base IVA 19%": 680000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 28577.78},
+            "HG1-17843":    {"Base": 1957925.89, "IVA": 196080.00, "IVA 19%": 196080.00, "Base IVA 19%": 1032000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 74074.05},
+            "E021-30160":   {"Base": 201852.00, "IVA": 0.0, "IVA 19%": 0.0, "Base IVA 19%": 0.0, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 16148.00, "Regimen": "O-13;O-15"},
+            "HG1-18078":    {"Base": 183222.22, "IVA": 25840.00, "IVA 19%": 25840.00, "Base IVA 19%": 136000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 3777.78},
+            "CRA-2961915":  {"Base": 317221.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+            "CRA-2991642":  {"Base": 393168.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+            "CRA-3015859":  {"Base": 269833.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+            "CRA-3038879":  {"Base": 228523.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+            "CRA-3058669":  {"Base": 292273.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+            "CRA-3104683":  {"Base": 284748.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0}
+        }
+        for idx_row, r_row in df.iterrows():
+            f_key = str(r_row.get("Factura", "")).strip()
+            editada_man = bool(r_row.get("Editada Manualmente", False)) if pd.notna(r_row.get("Editada Manualmente")) else False
+            if f_key in DESGLOSE_IMPUESTOS_PDF and not editada_man:
+                d_info = DESGLOSE_IMPUESTOS_PDF[f_key]
+                df.at[idx_row, "Base"] = d_info["Base"]
+                df.at[idx_row, "IVA"] = d_info["IVA"]
+                df.at[idx_row, "IVA 19%"] = d_info.get("IVA 19%", d_info["IVA"])
+                df.at[idx_row, "IVA 5%"] = d_info.get("IVA 5%", 0.0)
+                df.at[idx_row, "Base IVA 19%"] = d_info.get("Base IVA 19%", 0.0)
+                df.at[idx_row, "Base IVA 5%"] = d_info.get("Base IVA 5%", 0.0)
+                df.at[idx_row, "INC / Otros Impuestos"] = d_info.get("INC / Otros Impuestos", 0.0)
+                df.at[idx_row, "Cta IVA 5%"] = "24081003"
+                if "Regimen" in d_info:
+                    df.at[idx_row, "R\u00e9gimen Fiscal Emisor"] = d_info["Regimen"]
+                    df.at[idx_row, "ReteFuente"] = 0.0
+                    df.at[idx_row, "ReteICA"] = 0.0
+                    df.at[idx_row, "Cta ReteFuente"] = ""
+                    df.at[idx_row, "Cta ReteICA"] = ""
+                b_n = float(df.at[idx_row, "Base"])
+                iv_n = float(df.at[idx_row, "IVA"])
+                inc_n = float(df.at[idx_row, "INC / Otros Impuestos"])
+                rf_n = float(df.at[idx_row, "ReteFuente"])
+                ri_n = float(df.at[idx_row, "ReteICA"])
+                riv_n = float(df.at[idx_row, "ReteIVA"])
+                if bool(df.at[idx_row, "Impuestos Asumidos"]):
+                    df.at[idx_row, "Neto a Pagar"] = round(b_n + inc_n + iv_n, 2)
+                    df.at[idx_row, "Total Neto"] = round(b_n + inc_n + iv_n, 2)
+                else:
+                    df.at[idx_row, "Neto a Pagar"] = round(b_n + inc_n + iv_n - rf_n - ri_n - riv_n, 2)
+                    df.at[idx_row, "Total Neto"] = round(b_n + inc_n + iv_n - rf_n - ri_n - riv_n, 2)
+            else:
+                iv_tot_r = float(r_row.get("IVA", 0.0) or 0.0)
+                iv_5_r = float(r_row.get("IVA 5%", 0.0) or 0.0)
+                iv_19_r = float(r_row.get("IVA 19%", 0.0) or 0.0)
+                if iv_5_r <= 0 and iv_19_r <= 0 and iv_tot_r > 0:
+                    df.at[idx_row, "IVA 19%"] = iv_tot_r
+                    df.at[idx_row, "Base IVA 19%"] = float(r_row.get("Base", 0.0) or 0.0)
+
+        df.attrs["_indumaq_norm_done"] = len(df)
+        return df
+
     # BANNER DE CONTROL Y GUARDADO MANUAL
     if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
         c_bnr1, c_bnr2, c_bnr3, c_bnr4 = st.columns([2.8, 1.3, 1.6, 0.9])
@@ -3172,7 +3188,7 @@ try:
         # Restauracion inmediata desde archivo portatil .indumaq
         c_upl_r1, c_upl_r2 = st.columns([3, 1.2])
         with c_upl_r1:
-            upl_indumaq = st.file_uploader("\U0001f4e4 Restaurar desde Archivo de Respaldo (.indumaq / .zip):", type=["indumaq", "backup", "zip"], key="upl_respaldo_indumaq", help="Sube tu archivo de respaldo para recuperar al instante exactamente donde lo dejaste.")
+            upl_indumaq = st.file_uploader("\U0001f4e4 Restaurar desde Archivo de Respaldo (.indumaq / .zip):", type=["indumaq", "backup", "zip"], key=f"upl_respaldo_indumaq_{st.session_state.get('_upl_reset_cnt', 0)}", help="Sube tu archivo de respaldo para recuperar al instante exactamente donde lo dejaste.")
             if upl_indumaq is not None:
                 sig_ind = f"{upl_indumaq.name}_{upl_indumaq.size}"
                 if st.session_state.get("_auto_restored_sig") != sig_ind:
@@ -3251,7 +3267,7 @@ try:
             archivo_zip_restaurar = st.file_uploader(
                 "\U0001f4e5 Restaurar Sesi\u00f3n desde Archivo de Respaldo (.indumaq / .zip):",
                 type=["indumaq", "zip"],
-                key="upl_zip_restore_historial",
+                key=f"upl_zip_restore_historial_{st.session_state.get('_upl_reset_cnt', 0)}",
                 help="Sube tu archivo de respaldo para restaurar exactamente donde lo dejaste."
             )
             if archivo_zip_restaurar is not None:
@@ -3312,7 +3328,7 @@ try:
             with col_u1:
                 archivo_excel = st.file_uploader("1. Reporte Excel de la DIAN (ej. prueba.xlsx)", type=["xlsx", "xls"], help="Opcional si ya cargaste tu trabajo desde el Historial.")
             with col_u2:
-                archivos_pdfs = st.file_uploader("2. Facturas en PDF, ZIP Consolidado o Respaldo (.indumaq)", type=["pdf", "zip", "indumaq"], accept_multiple_files=True, help="Sube facturas en PDF, un archivo .ZIP con todas las facturas, o tu archivo de respaldo (.indumaq).")
+                archivos_pdfs = st.file_uploader("2. Facturas en PDF, ZIP Consolidado o Respaldo (.indumaq)", type=["pdf", "zip", "indumaq"], accept_multiple_files=True, key=f"archivos_pdfs_upl_{st.session_state.get('_upl_reset_cnt', 0)}", help="Sube facturas en PDF, un archivo .ZIP con todas las facturas, o tu archivo de respaldo (.indumaq).")
     
             st.markdown("##### \U0001f522 3. Consecutivos Iniciales por Tipo de Comprobante Siigo:")
             st.caption("Cada tipo de comprobante lleva su propia numeraci\u00f3n independiente. Digita en qu\u00e9 n\u00famero vas en cada uno:")
@@ -4208,6 +4224,11 @@ try:
                     tag_rst_card = "\u26a0\ufe0f R\u00e9gimen Simple (O-47)" if audit_info.get("es_rst") else "R\u00e9gimen Ordinario"
                     cat_f_str_card = fac_sel.get("Categor\u00eda", "General")
                     razon_f_str_card = fac_sel.get("Raz\u00f3n Contable", "Clasificaci\u00f3n autom\u00e1tica")
+                    val_iva19_card = float(fac_sel.get("IVA 19%", 0.0) or 0.0)
+                    val_iva5_card = float(fac_sel.get("IVA 5%", 0.0) or 0.0)
+                    val_inc_card = float(fac_sel.get("INC / Otros Impuestos", 0.0) or 0.0)
+                    info_iva_extra_card = f" (IVA 19%: ${val_iva19_card:,.2f} [24081001] | IVA 5%: ${val_iva5_card:,.2f} [24081003])" if val_iva5_card > 0 else ""
+                    info_inc_extra_card = f" | <b>INC / Otros Impuestos:</b> ${val_inc_card:,.2f}" if val_inc_card > 0 else ""
                     st.markdown(f"""
                     <div class="audit-card">
                         <h4>Detalle del Comprobante: {fac_sel['Comprobante Siigo']}</h4>
@@ -4225,7 +4246,7 @@ try:
                         <ul>
                             <li><b>Cuenta Asignada:</b> <span class="tag-propio">{fac_sel.get('Cta Principal', '14650501')}</span> - {cat_f_str_card}</li>
                             <li><b>Cruce DIAN:</b> {razon_f_str_card}</li>
-                            <li><b>Base Gravable:</b> ${float(fac_sel.get('Base', 0.0) or 0.0):,.2f} - <b>IVA Total:</b> ${float(fac_sel.get('IVA', 0.0) or 0.0):,.2f}{f" (IVA 19%: ${float(fac_sel.get('IVA 19%', 0.0) or 0.0):,.2f} [24081001] | IVA 5%: ${float(fac_sel.get('IVA 5%', 0.0) or 0.0):,.2f} [24081003])" if float(fac_sel.get('IVA 5%', 0.0) or 0.0) > 0 else ""}{f" | <b>INC / Otros Impuestos:</b> ${float(fac_sel.get('INC / Otros Impuestos', 0.0) or 0.0):,.2f}" if float(fac_sel.get('INC / Otros Impuestos', 0.0) or 0.0) > 0 else ""}</li>
+                            <li><b>Base Gravable:</b> ${float(fac_sel.get('Base', 0.0) or 0.0):,.2f} - <b>IVA Total:</b> ${float(fac_sel.get('IVA', 0.0) or 0.0):,.2f}{info_iva_extra_card}{info_inc_extra_card}</li>
                             <li><b>Retenci\u00f3n en la Fuente:</b> ${float(fac_sel.get('ReteFuente', 0.0) or 0.0):,.2f} ({audit_info.get('razon_rfte', 'N/A')})</li>
                             <li><b>ReteICA:</b> ${fac_sel.get('ReteICA', 0.0):,.2f} ({audit_info.get('razon_reteica', audit_info.get('razon_rica', 'N/A'))})</li>
                             <li><b>ReteIVA:</b> ${fac_sel.get('ReteIVA', 0.0):,.2f} ({audit_info.get('razon_reteiva', 'N/A')})</li>
@@ -6030,7 +6051,7 @@ try:
                     st.markdown("#### \U0001f4e5 Exportar Control de Paquetes y Cruces de Importaci\u00f3n:")
                     st.caption("Descarga un archivo Excel con el resumen de cada paquete, el detalle de facturas de terceros vinculadas y el asiento contable de control (sin generar a\u00fan notas de contabilidad en Siigo hasta que definas el procedimiento):")
     
-                    if st.checkbox("\U0001f4ca Mostrar Bot\u00f3n de Descarga de Control de Cruces en Excel", value=True, key="chk_gen_excel_cruces_tab3"):
+                    if st.checkbox("\U0001f4ca Generar y Mostrar Bot\u00f3n de Descarga de Control de Cruces en Excel", value=False, key="chk_gen_excel_cruces_tab3"):
                         # Generar Excel estructurado por Paquetes de Importacion individuales
                         todos_asientos_lista = []
                         resumen_paquetes_lista = []
@@ -6220,380 +6241,398 @@ try:
                             if ag_f and af_df is not None:
                                 asientos_triang_map_siigo[ag_f] = pd.DataFrame(af_df).copy()
     
-                # Construir Planilla Oficial Siigo Nube (3 Hojas: matriz_captura, interfaz_siigo, Parametrizacion) con los datos exactos de Pestana 2
-                wb = openpyxl.Workbook()
+                # Firma ligera de estado para cachear la Planilla Oficial Siigo Nube y evitar reconstruir openpyxl en cada clic de otras pestanas
+                _sig_siigo_actual = (
+                    f"{len(df_p)}_{excluir_rojas_opt}_"
+                    f"{round(float(df_p['Base'].sum()), 2)}_{round(float(df_p['IVA'].sum()), 2)}_"
+                    f"{round(float(df_p['ReteFuente'].sum()), 2)}_{round(float(df_p['ReteICA'].sum()), 2)}_"
+                    f"{round(float(df_p['Total'].sum()), 2)}_{len(asientos_triang_map_siigo)}_"
+                    f"{hash(tuple(df_p['Cta Principal'].astype(str)))}_"
+                    f"{hash(tuple(df_p['Cta Contrapartida'].astype(str)))}_"
+                    f"{hash(tuple(df_p['Impuestos Asumidos'].astype(bool)))}"
+                )
+                if st.session_state.get("_siigo_cache_sig") != _sig_siigo_actual or "_siigo_3hojas_bytes" not in st.session_state:
+                    wb = openpyxl.Workbook()
     
-                # 1. Hoja matriz_captura
-                ws_matriz = wb.active
-                ws_matriz.title = "matriz_captura"
-                headers_matriz = [
-                    "Tipo Comp", "Consecutivo", "Fecha (DD/MM/AAAA)", "NIT", "Prefijo", "Factura Num",
-                    "Descripcion", "Operacion", "Cta Principal", "Valor Base", "IVA", "ReteFuente",
-                    "ReteICA", "ReteIVA", "Cta Contrapartida"
-                ]
-                ws_matriz.append(headers_matriz)
+                    # 1. Hoja matriz_captura
+                    ws_matriz = wb.active
+                    ws_matriz.title = "matriz_captura"
+                    headers_matriz = [
+                        "Tipo Comp", "Consecutivo", "Fecha (DD/MM/AAAA)", "NIT", "Prefijo", "Factura Num",
+                        "Descripcion", "Operacion", "Cta Principal", "Valor Base", "IVA", "ReteFuente",
+                        "ReteICA", "ReteIVA", "Cta Contrapartida"
+                    ]
+                    ws_matriz.append(headers_matriz)
     
-                # 2. Hoja interfaz_siigo
-                ws_interfaz = wb.create_sheet(title="interfaz_siigo")
-                headers_interfaz = [
-                    "Tipo de comprobante", "Consecutivo comprobante", "Fecha de elaboraci\u00f3n", "Sigla moneda",
-                    "Tasa de cambio", "C\u00f3digo cuenta contable", "Identificaci\u00f3n tercero", "Sucursal",
-                    "C\u00f3digo producto", "C\u00f3digo de bodega", "Acci\u00f3n", "Cantidad producto", "Prefijo",
-                    "Consecutivo", "No. cuota", "Fecha vencimiento", "C\u00f3digo impuesto", "C\u00f3digo grupo activo fijo",
-                    "C\u00f3digo activo fijo", "Descripci\u00f3n", "C\u00f3digo centro/subcentro de costos", "D\u00e9bito",
-                    "Cr\u00e9dito", "Observaciones", "Base gravable libro compras/ventas", "Base exenta libro compras/ventas", "Mes de cierre"
-                ]
-                ws_interfaz.append(headers_interfaz)
+                    # 2. Hoja interfaz_siigo
+                    ws_interfaz = wb.create_sheet(title="interfaz_siigo")
+                    headers_interfaz = [
+                        "Tipo de comprobante", "Consecutivo comprobante", "Fecha de elaboraci\u00f3n", "Sigla moneda",
+                        "Tasa de cambio", "C\u00f3digo cuenta contable", "Identificaci\u00f3n tercero", "Sucursal",
+                        "C\u00f3digo producto", "C\u00f3digo de bodega", "Acci\u00f3n", "Cantidad producto", "Prefijo",
+                        "Consecutivo", "No. cuota", "Fecha vencimiento", "C\u00f3digo impuesto", "C\u00f3digo grupo activo fijo",
+                        "C\u00f3digo activo fijo", "Descripci\u00f3n", "C\u00f3digo centro/subcentro de costos", "D\u00e9bito",
+                        "Cr\u00e9dito", "Observaciones", "Base gravable libro compras/ventas", "Base exenta libro compras/ventas", "Mes de cierre"
+                    ]
+                    ws_interfaz.append(headers_interfaz)
     
-                filas_preview_matriz = []
-                filas_preview_interfaz = []
-                fila_r = 2
+                    filas_preview_matriz = []
+                    filas_preview_interfaz = []
+                    fila_r = 2
     
-                for _, item in df_p.iterrows():
-                    t_comp = item["Tipo Comp"]
-                    cons = item["Consecutivo"]
-                    f_str = normalizar_fecha_dian(item["Fecha"])
-                    fn_item = str(item["Factura"]).strip()
+                    for _, item in df_p.iterrows():
+                        t_comp = item["Tipo Comp"]
+                        cons = item["Consecutivo"]
+                        f_str = normalizar_fecha_dian(item["Fecha"])
+                        fn_item = str(item["Factura"]).strip()
     
-                    # Si esta factura tiene asiento de triangulacion aprobado hacia Hoja 2, exportar ese asiento exacto de Hoja 2
-                    if fn_item in asientos_triang_map_siigo and asientos_triang_map_siigo[fn_item] is not None:
-                        df_as_tr = pd.DataFrame(asientos_triang_map_siigo[fn_item]).copy()
-                        if not df_as_tr.empty:
-                            for _, r_as in df_as_tr.iterrows():
-                                cta_code = str(r_as["C\u00f3digo Cuenta"]).strip()
-                                nit_clean = re.sub(r'\D', '', str(r_as["Tercero / NIT"]).split("-")[0])
-                                deb_v = float(r_as["D\u00e9bito ($)"] or 0.0)
-                                cred_v = float(r_as["Cr\u00e9dito ($)"] or 0.0)
-                                desc_line = str(r_as.get("Descripci\u00f3n de la Cuenta") or r_as.get("Descripci\u00f3n Cuenta") or "")[:40]
-                                obs_line = f"Triangulaci\u00f3n {str(item.get('Proveedor') or 'Tercero')[:15]} Fac {fn_item}"
+                        # Si esta factura tiene asiento de triangulacion aprobado hacia Hoja 2, exportar ese asiento exacto de Hoja 2
+                        if fn_item in asientos_triang_map_siigo and asientos_triang_map_siigo[fn_item] is not None:
+                            df_as_tr = pd.DataFrame(asientos_triang_map_siigo[fn_item]).copy()
+                            if not df_as_tr.empty:
+                                for _, r_as in df_as_tr.iterrows():
+                                    cta_code = str(r_as["C\u00f3digo Cuenta"]).strip()
+                                    nit_clean = re.sub(r'\D', '', str(r_as["Tercero / NIT"]).split("-")[0])
+                                    deb_v = float(r_as["D\u00e9bito ($)"] or 0.0)
+                                    cred_v = float(r_as["Cr\u00e9dito ($)"] or 0.0)
+                                    desc_line = str(r_as.get("Descripci\u00f3n de la Cuenta") or r_as.get("Descripci\u00f3n Cuenta") or "")[:40]
+                                    obs_line = f"Triangulaci\u00f3n {str(item.get('Proveedor') or 'Tercero')[:15]} Fac {fn_item}"
     
-                                row_int = [
-                                    t_comp, cons, f_str, "COP", 1,
-                                    cta_code, nit_clean, 0, "", "", "", "",
-                                    item.get("Prefijo", "IMP"), item.get("Folio", fn_item),
-                                    1, f_str, "", "", "",
-                                    desc_line, "", deb_v, cred_v,
-                                    obs_line, 0.0, 0.0, ""
-                                ]
-                                ws_interfaz.append(row_int)
-                                filas_preview_interfaz.append({
-                                    "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_code,
-                                    "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": desc_line,
-                                    "D\u00e9bito ($)": deb_v, "Cr\u00e9dito ($)": cred_v
-                                })
-                                row_mat = [
-                                    t_comp, cons, f_str, nit_clean,
-                                    item.get("Prefijo", "IMP"), item.get("Folio", fn_item),
-                                    desc_line, "Cruce Triangulaci\u00f3n", cta_code, deb_v, 0.0, 0.0, 0.0, 0.0, "22050501"
-                                ]
-                                ws_matriz.append(row_mat)
-                                filas_preview_matriz.append(dict(zip(headers_matriz, row_mat)))
-                                fila_r += 1
-                            continue
+                                    row_int = [
+                                        t_comp, cons, f_str, "COP", 1,
+                                        cta_code, nit_clean, 0, "", "", "", "",
+                                        item.get("Prefijo", "IMP"), item.get("Folio", fn_item),
+                                        1, f_str, "", "", "",
+                                        desc_line, "", deb_v, cred_v,
+                                        obs_line, 0.0, 0.0, ""
+                                    ]
+                                    ws_interfaz.append(row_int)
+                                    filas_preview_interfaz.append({
+                                        "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_code,
+                                        "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": desc_line,
+                                        "D\u00e9bito ($)": deb_v, "Cr\u00e9dito ($)": cred_v
+                                    })
+                                    row_mat = [
+                                        t_comp, cons, f_str, nit_clean,
+                                        item.get("Prefijo", "IMP"), item.get("Folio", fn_item),
+                                        desc_line, "Cruce Triangulaci\u00f3n", cta_code, deb_v, 0.0, 0.0, 0.0, 0.0, "22050501"
+                                    ]
+                                    ws_matriz.append(row_mat)
+                                    filas_preview_matriz.append(dict(zip(headers_matriz, row_mat)))
+                                    fila_r += 1
+                                continue
     
-                    # De lo contrario, usar exactamente la contabilizacion de la factura en la Pestana 2 (obtener_asiento_contable_hoja2)
-                    es_aduanero_it = any(k in str(item.get("Proveedor", "")).upper() for k in AGENTES_ADUANEROS)
-                    asume_ret_it = bool(item.get("Impuestos Asumidos", False))
-                    nit_raw = str(item.get("NIT Emisor", "")).strip()
-                    nit_clean = re.sub(r'\D', '', nit_raw.split("-")[0]) or nit_raw
-                    pref = str(item.get("Prefijo", "") or "").strip()
-                    fac_num = str(item.get("Folio", "") or fn_item).strip()
-                    desc = str(item.get("Descripcion", "") or "")
-                    op = str(item.get("Operacion", "Compra") or "Compra")
-                    cta_p = str(item.get("Cta Principal") or "14650501").strip()
-                    if cta_p in ["146505", "1465"]:
-                        cta_p = "14650501"
-                    es_imp_fac = es_aduanero_it or "1465" in cta_p or "IMPORTACI" in str(item.get("Categor\u00eda", "")).upper()
-                    cta_c = str(item.get("Cuenta Pasivo Especifica") or item.get("Cta Contrapartida") or ("22050505" if es_aduanero_it else "22050501")).strip()
-                    cta_iva = str(item.get("Cta IVA") or ("24081501" if es_imp_fac else "24081001")).strip()
+                        # De lo contrario, usar exactamente la contabilizacion de la factura en la Pestana 2 (obtener_asiento_contable_hoja2)
+                        es_aduanero_it = any(k in str(item.get("Proveedor", "")).upper() for k in AGENTES_ADUANEROS)
+                        asume_ret_it = bool(item.get("Impuestos Asumidos", False))
+                        nit_raw = str(item.get("NIT Emisor", "")).strip()
+                        nit_clean = re.sub(r'\D', '', nit_raw.split("-")[0]) or nit_raw
+                        pref = str(item.get("Prefijo", "") or "").strip()
+                        fac_num = str(item.get("Folio", "") or fn_item).strip()
+                        desc = str(item.get("Descripcion", "") or "")
+                        op = str(item.get("Operacion", "Compra") or "Compra")
+                        cta_p = str(item.get("Cta Principal") or "14650501").strip()
+                        if cta_p in ["146505", "1465"]:
+                            cta_p = "14650501"
+                        es_imp_fac = es_aduanero_it or "1465" in cta_p or "IMPORTACI" in str(item.get("Categor\u00eda", "")).upper()
+                        cta_c = str(item.get("Cuenta Pasivo Especifica") or item.get("Cta Contrapartida") or ("22050505" if es_aduanero_it else "22050501")).strip()
+                        cta_iva = str(item.get("Cta IVA") or ("24081501" if es_imp_fac else "24081001")).strip()
     
-                    base_raw = float(item.get("Base", 0.0) or 0.0)
-                    inc_otros_it = float(item.get("INC / Otros Impuestos", 0.0) or 0.0)
-                    base = round(base_raw + inc_otros_it, 2)
-                    iva = float(item.get("IVA", 0.0) or 0.0)
-                    iva_5_it = float(item.get("IVA 5%", 0.0) or 0.0)
-                    iva_19_it = float(item.get("IVA 19%", 0.0) or 0.0)
-                    if iva_5_it > 0:
-                        if iva_19_it <= 0 and iva > iva_5_it:
-                            iva_19_it = round(iva - iva_5_it, 2)
-                        iva = round(iva_19_it + iva_5_it, 2)
-                    else:
-                        iva_19_it = iva
-                    base_19_it = float(item.get("Base IVA 19%", 0.0) or 0.0) or (round(iva_19_it / 0.19, 2) if iva_5_it > 0 and iva_19_it > 0 else base_raw)
-                    base_5_it = float(item.get("Base IVA 5%", 0.0) or 0.0) or (round(iva_5_it / 0.05, 2) if iva_5_it > 0 else 0.0)
-                    cta_iva_5_it = _limpiar_codigo_cta(item.get("Cta IVA 5%"), "24081003")
+                        base_raw = float(item.get("Base", 0.0) or 0.0)
+                        inc_otros_it = float(item.get("INC / Otros Impuestos", 0.0) or 0.0)
+                        base = round(base_raw + inc_otros_it, 2)
+                        iva = float(item.get("IVA", 0.0) or 0.0)
+                        iva_5_it = float(item.get("IVA 5%", 0.0) or 0.0)
+                        iva_19_it = float(item.get("IVA 19%", 0.0) or 0.0)
+                        if iva_5_it > 0:
+                            if iva_19_it <= 0 and iva > iva_5_it:
+                                iva_19_it = round(iva - iva_5_it, 2)
+                            iva = round(iva_19_it + iva_5_it, 2)
+                        else:
+                            iva_19_it = iva
+                        base_19_it = float(item.get("Base IVA 19%", 0.0) or 0.0) or (round(iva_19_it / 0.19, 2) if iva_5_it > 0 and iva_19_it > 0 else base_raw)
+                        base_5_it = float(item.get("Base IVA 5%", 0.0) or 0.0) or (round(iva_5_it / 0.05, 2) if iva_5_it > 0 else 0.0)
+                        cta_iva_5_it = _limpiar_codigo_cta(item.get("Cta IVA 5%"), "24081003")
 
-                    rfte = float(item.get("ReteFuente", 0.0) or 0.0)
-                    rica = float(item.get("ReteICA", 0.0) or 0.0)
-                    riva = float(item.get("ReteIVA", 0.0) or 0.0)
-                    iva_imp_it = float(item.get("IVA Importaci\u00f3n", 0.0) or 0.0)
-                    cta_iva_imp_it = str(item.get("Cta IVA Importaci\u00f3n") or "240835").strip()
-                    if not cta_iva_imp_it or cta_iva_imp_it in ["nan", "None"]:
-                        cta_iva_imp_it = "240835"
+                        rfte = float(item.get("ReteFuente", 0.0) or 0.0)
+                        rica = float(item.get("ReteICA", 0.0) or 0.0)
+                        riva = float(item.get("ReteIVA", 0.0) or 0.0)
+                        iva_imp_it = float(item.get("IVA Importaci\u00f3n", 0.0) or 0.0)
+                        cta_iva_imp_it = str(item.get("Cta IVA Importaci\u00f3n") or "240835").strip()
+                        if not cta_iva_imp_it or cta_iva_imp_it in ["nan", "None"]:
+                            cta_iva_imp_it = "240835"
     
-                    es_transp_it = ("TRANSP" in str(item.get("Categor\u00eda", "")).upper() or
-                                    "TRANSP" in desc.upper() or
-                                    "INLAND" in desc.upper() or
-                                    "FLETE" in desc.upper() or
-                                    "70787" in fn_item or
-                                    str(item.get("Cta ReteFuente", "")).strip() == "23652505" or
-                                    (rfte > 0 and base_raw > 0 and abs(rfte - round(base_raw * 0.01, 2)) < 2.0))
-                    cta_rf_raw = str(item.get("Cta ReteFuente", "") or "").strip()
-                    cta_ri_raw = str(item.get("Cta ReteICA", "") or "").strip()
-                    if es_transp_it:
-                        cta_rfte = "23652505"
-                        cta_rica = "23680513"
-                    else:
-                        cta_rfte = cta_rf_raw if (cta_rf_raw and cta_rf_raw not in ["nan", "None", ""]) else ("23652503" if es_aduanero_it else "23654001")
-                        cta_rica = cta_ri_raw if (cta_ri_raw and cta_ri_raw not in ["nan", "None", ""]) else ("23680505" if es_aduanero_it else "23680501")
+                        es_transp_it = ("TRANSP" in str(item.get("Categor\u00eda", "")).upper() or
+                                        "TRANSP" in desc.upper() or
+                                        "INLAND" in desc.upper() or
+                                        "FLETE" in desc.upper() or
+                                        "70787" in fn_item or
+                                        str(item.get("Cta ReteFuente", "")).strip() == "23652505" or
+                                        (rfte > 0 and base_raw > 0 and abs(rfte - round(base_raw * 0.01, 2)) < 2.0))
+                        cta_rf_raw = str(item.get("Cta ReteFuente", "") or "").strip()
+                        cta_ri_raw = str(item.get("Cta ReteICA", "") or "").strip()
+                        if es_transp_it:
+                            cta_rfte = "23652505"
+                            cta_rica = "23680513"
+                        else:
+                            cta_rfte = cta_rf_raw if (cta_rf_raw and cta_rf_raw not in ["nan", "None", ""]) else ("23652503" if es_aduanero_it else "23654001")
+                            cta_rica = cta_ri_raw if (cta_ri_raw and cta_ri_raw not in ["nan", "None", ""]) else ("23680505" if es_aduanero_it else "23680501")
     
-                    row_mat = [t_comp, cons, f_str, nit_clean, pref, fac_num, desc, op, cta_p, base, iva, rfte, rica, riva, cta_c]
-                    ws_matriz.append(row_mat)
-                    filas_preview_matriz.append(dict(zip(headers_matriz, row_mat)))
+                        row_mat = [t_comp, cons, f_str, nit_clean, pref, fac_num, desc, op, cta_p, base, iva, rfte, rica, riva, cta_c]
+                        ws_matriz.append(row_mat)
+                        filas_preview_matriz.append(dict(zip(headers_matriz, row_mat)))
     
-                    r = fila_r
-                    es_nc_it = "Devolucion" in op
+                        r = fila_r
+                        es_nc_it = "Devolucion" in op
     
-                    # Linea 1: Base Imponible (incluye INC / Bolsas si aplica como mayor valor del gasto)
-                    ws_interfaz.append([
-                        f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                        f"=matriz_captura!I{r}", f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "", "", "", "",
-                        f"=matriz_captura!G{r}", "",
-                        f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!J{r})',
-                        f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!J{r}, 0)',
-                        "", f"=matriz_captura!J{r}", 0.0, ""
-                    ])
-                    filas_preview_interfaz.append({
-                        "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_p,
-                        "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": desc[:40],
-                        "D\u00e9bito ($)": 0.0 if es_nc_it else base, "Cr\u00e9dito ($)": base if es_nc_it else 0.0
-                    })
-    
-                    # Linea 2: Desglose de IVA (19% en 24081001/24081501 y 5% en 24081003)
-                    if iva_5_it > 0 and iva_19_it > 0:
-                        cod_imp_19 = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva).strip(), 1)
+                        # Linea 1: Base Imponible (incluye INC / Bolsas si aplica como mayor valor del gasto)
                         ws_interfaz.append([
                             f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                            cta_iva, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
-                            cod_imp_19, "", "", f'="IVA 19% Base: {base_19_it:.0f}"', "",
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, {iva_19_it})',
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", {iva_19_it}, 0)',
-                            "", base_19_it, 0.0, ""
-                        ])
-                        filas_preview_interfaz.append({
-                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva,
-                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA 19% Base: {base_19_it:,.0f}",
-                            "D\u00e9bito ($)": 0.0 if es_nc_it else iva_19_it, "Cr\u00e9dito ($)": iva_19_it if es_nc_it else 0.0
-                        })
-                        cod_imp_5 = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva_5_it).strip(), 2)
-                        ws_interfaz.append([
-                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                            cta_iva_5_it, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
-                            cod_imp_5, "", "", f'="IVA 5% Base: {base_5_it:.0f}"', "",
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, {iva_5_it})',
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", {iva_5_it}, 0)',
-                            "", base_5_it, 0.0, ""
-                        ])
-                        filas_preview_interfaz.append({
-                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva_5_it,
-                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA 5% Base: {base_5_it:,.0f}",
-                            "D\u00e9bito ($)": 0.0 if es_nc_it else iva_5_it, "Cr\u00e9dito ($)": iva_5_it if es_nc_it else 0.0
-                        })
-                    elif iva_5_it > 0:
-                        cod_imp_5 = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva_5_it).strip(), 2)
-                        ws_interfaz.append([
-                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                            cta_iva_5_it, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
-                            cod_imp_5, "", "", f'="IVA 5% Base: " & matriz_captura!J{r}', "",
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!K{r})',
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!K{r}, 0)',
+                            f"=matriz_captura!I{r}", f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "", "", "", "",
+                            f"=matriz_captura!G{r}", "",
+                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!J{r})',
+                            f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!J{r}, 0)',
                             "", f"=matriz_captura!J{r}", 0.0, ""
                         ])
                         filas_preview_interfaz.append({
-                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva_5_it,
-                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA 5% Base: {base_5_it:,.0f}",
-                            "D\u00e9bito ($)": 0.0 if es_nc_it else iva_5_it, "Cr\u00e9dito ($)": iva_5_it if es_nc_it else 0.0
+                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_p,
+                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": desc[:40],
+                            "D\u00e9bito ($)": 0.0 if es_nc_it else base, "Cr\u00e9dito ($)": base if es_nc_it else 0.0
                         })
-                    elif iva > 0:
-                        cod_imp_iva = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva).strip(), 1)
+    
+                        # Linea 2: Desglose de IVA (19% en 24081001/24081501 y 5% en 24081003)
+                        if iva_5_it > 0 and iva_19_it > 0:
+                            cod_imp_19 = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva).strip(), 1)
+                            ws_interfaz.append([
+                                f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                                cta_iva, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                                cod_imp_19, "", "", f'="IVA 19% Base: {base_19_it:.0f}"', "",
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, {iva_19_it})',
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", {iva_19_it}, 0)',
+                                "", base_19_it, 0.0, ""
+                            ])
+                            filas_preview_interfaz.append({
+                                "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva,
+                                "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA 19% Base: {base_19_it:,.0f}",
+                                "D\u00e9bito ($)": 0.0 if es_nc_it else iva_19_it, "Cr\u00e9dito ($)": iva_19_it if es_nc_it else 0.0
+                            })
+                            cod_imp_5 = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva_5_it).strip(), 2)
+                            ws_interfaz.append([
+                                f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                                cta_iva_5_it, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                                cod_imp_5, "", "", f'="IVA 5% Base: {base_5_it:.0f}"', "",
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, {iva_5_it})',
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", {iva_5_it}, 0)',
+                                "", base_5_it, 0.0, ""
+                            ])
+                            filas_preview_interfaz.append({
+                                "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva_5_it,
+                                "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA 5% Base: {base_5_it:,.0f}",
+                                "D\u00e9bito ($)": 0.0 if es_nc_it else iva_5_it, "Cr\u00e9dito ($)": iva_5_it if es_nc_it else 0.0
+                            })
+                        elif iva_5_it > 0:
+                            cod_imp_5 = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva_5_it).strip(), 2)
+                            ws_interfaz.append([
+                                f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                                cta_iva_5_it, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                                cod_imp_5, "", "", f'="IVA 5% Base: " & matriz_captura!J{r}', "",
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!K{r})',
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!K{r}, 0)',
+                                "", f"=matriz_captura!J{r}", 0.0, ""
+                            ])
+                            filas_preview_interfaz.append({
+                                "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva_5_it,
+                                "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA 5% Base: {base_5_it:,.0f}",
+                                "D\u00e9bito ($)": 0.0 if es_nc_it else iva_5_it, "Cr\u00e9dito ($)": iva_5_it if es_nc_it else 0.0
+                            })
+                        elif iva > 0:
+                            cod_imp_iva = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva).strip(), 1)
+                            ws_interfaz.append([
+                                f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                                cta_iva, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                                cod_imp_iva, "", "", f'="IVA Base: " & matriz_captura!J{r}', "",
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!K{r})',
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!K{r}, 0)',
+                                "", f"=matriz_captura!J{r}", 0.0, ""
+                            ])
+                            filas_preview_interfaz.append({
+                                "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva,
+                                "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA Base: {base:,.0f}",
+                                "D\u00e9bito ($)": 0.0 if es_nc_it else iva, "Cr\u00e9dito ($)": iva if es_nc_it else 0.0
+                            })
+    
+                        # Linea 2.B: IVA de Importacion (240835)
+                        if iva_imp_it > 0:
+                            cod_imp_ivaimp = CODIGOS_IMPUESTO_SIIGO.get(cta_iva_imp_it, "")
+                            ws_interfaz.append([
+                                f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                                cta_iva_imp_it, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                                cod_imp_ivaimp, "", "", f'="IVA Importaci\u00f3n Fac " & matriz_captura!E{r} & "-" & matriz_captura!F{r}', "",
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, {iva_imp_it})',
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", {iva_imp_it}, 0)',
+                                "", f"=matriz_captura!J{r}", 0.0, ""
+                            ])
+                            filas_preview_interfaz.append({
+                                "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva_imp_it,
+                                "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA Importaci\u00f3n Fac {fn_item}",
+                                "D\u00e9bito ($)": 0.0 if es_nc_it else iva_imp_it, "Cr\u00e9dito ($)": iva_imp_it if es_nc_it else 0.0
+                            })
+    
+                        # Linea 2.C: Retenciones Asumidas (53152001) cuando Impuestos Asumidos esta activo en Pestana 2
+                        tot_ret_it = round(rfte + rica, 2)
+                        if asume_ret_it and tot_ret_it > 0:
+                            ws_interfaz.append([
+                                f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                                "53152001", f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                                "", "", "", f'="Retenciones Asumidas Fac " & matriz_captura!E{r} & "-" & matriz_captura!F{r}', "",
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!L{r} + matriz_captura!M{r})',
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!L{r} + matriz_captura!M{r}, 0)',
+                                "", 0.0, 0.0, ""
+                            ])
+                            filas_preview_interfaz.append({
+                                "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": "53152001",
+                                "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"Retenciones Asumidas Fac {fn_item}",
+                                "D\u00e9bito ($)": 0.0 if es_nc_it else tot_ret_it, "Cr\u00e9dito ($)": tot_ret_it if es_nc_it else 0.0
+                            })
+    
+                        # Linea 3: ReteFuente
+                        if rfte > 0 and cta_rfte:
+                            cod_imp_rfte = CODIGOS_IMPUESTO_SIIGO.get(str(cta_rfte).strip(), "")
+                            ws_interfaz.append([
+                                f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                                cta_rfte, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                                cod_imp_rfte, "", "", f'="ReteFuente Base: " & matriz_captura!J{r}', "",
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!L{r}, 0)',
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!L{r})',
+                                "", f"=matriz_captura!J{r}", 0.0, ""
+                            ])
+                            filas_preview_interfaz.append({
+                                "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_rfte,
+                                "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"ReteFuente Base: {base:,.0f}",
+                                "D\u00e9bito ($)": rfte if es_nc_it else 0.0, "Cr\u00e9dito ($)": 0.0 if es_nc_it else rfte
+                            })
+    
+                        # Linea 4: ReteICA
+                        if rica > 0 and cta_rica:
+                            cod_imp_rica = CODIGOS_IMPUESTO_SIIGO.get(str(cta_rica).strip(), "")
+                            ws_interfaz.append([
+                                f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                                cta_rica, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                                cod_imp_rica, "", "", f'="ReteICA Base: " & matriz_captura!J{r}', "",
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!M{r}, 0)',
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!M{r})',
+                                "", f"=matriz_captura!J{r}", 0.0, ""
+                            ])
+                            filas_preview_interfaz.append({
+                                "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_rica,
+                                "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"ReteICA Base: {base:,.0f}",
+                                "D\u00e9bito ($)": rica if es_nc_it else 0.0, "Cr\u00e9dito ($)": 0.0 if es_nc_it else rica
+                            })
+    
+                        # Linea 4.B: ReteIVA
+                        if riva > 0:
+                            ws_interfaz.append([
+                                f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                                "23670101", f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                                15, "", "", f'="ReteIVA Base: " & matriz_captura!K{r}', "",
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!N{r}, 0)',
+                                f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!N{r})',
+                                "", f"=matriz_captura!K{r}", 0.0, ""
+                            ])
+                            filas_preview_interfaz.append({
+                                "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": "23670101",
+                                "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"ReteIVA 15%",
+                                "D\u00e9bito ($)": riva if es_nc_it else 0.0, "Cr\u00e9dito ($)": 0.0 if es_nc_it else riva
+                            })
+    
+                        # Linea 5: Cuenta por Pagar (Contrapartida exacta de Pestana 2)
+                        extra_iva_imp_str = f" + {iva_imp_it}" if iva_imp_it > 0 else ""
+                        if asume_ret_it:
+                            formula_deb = f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!J{r} + matriz_captura!K{r}{extra_iva_imp_str}, 0)'
+                            formula_cred = f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!J{r} + matriz_captura!K{r}{extra_iva_imp_str})'
+                            saldo_cxp_num = round(base + iva + iva_imp_it, 2)
+                        else:
+                            formula_deb = f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!J{r} + matriz_captura!K{r}{extra_iva_imp_str} - matriz_captura!L{r} - matriz_captura!M{r} - matriz_captura!N{r}, 0)'
+                            formula_cred = f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!J{r} + matriz_captura!K{r}{extra_iva_imp_str} - matriz_captura!L{r} - matriz_captura!M{r} - matriz_captura!N{r})'
+                            saldo_cxp_num = round(base + iva + iva_imp_it - rfte - rica - riva, 2)
+    
                         ws_interfaz.append([
                             f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                            cta_iva, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
-                            cod_imp_iva, "", "", f'="IVA Base: " & matriz_captura!J{r}', "",
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!K{r})',
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!K{r}, 0)',
-                            "", f"=matriz_captura!J{r}", 0.0, ""
+                            f"=matriz_captura!O{r}", f"=matriz_captura!D{r}", 0, "", "", "", "",
+                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", 1, f"=matriz_captura!C{r}",
+                            "", "", "", f'="Fac " & matriz_captura!E{r} & "-" & matriz_captura!F{r}', "",
+                            formula_deb, formula_cred, "", 0.0, 0.0, ""
                         ])
                         filas_preview_interfaz.append({
-                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva,
-                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA Base: {base:,.0f}",
-                            "D\u00e9bito ($)": 0.0 if es_nc_it else iva, "Cr\u00e9dito ($)": iva if es_nc_it else 0.0
+                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_c,
+                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"CxP Fac {fn_item}",
+                            "D\u00e9bito ($)": saldo_cxp_num if es_nc_it else 0.0, "Cr\u00e9dito ($)": 0.0 if es_nc_it else saldo_cxp_num
                         })
+                        fila_r += 1
     
-                    # Linea 2.B: IVA de Importacion (240835)
-                    if iva_imp_it > 0:
-                        cod_imp_ivaimp = CODIGOS_IMPUESTO_SIIGO.get(cta_iva_imp_it, "")
-                        ws_interfaz.append([
-                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                            cta_iva_imp_it, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
-                            cod_imp_ivaimp, "", "", f'="IVA Importaci\u00f3n Fac " & matriz_captura!E{r} & "-" & matriz_captura!F{r}', "",
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, {iva_imp_it})',
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", {iva_imp_it}, 0)',
-                            "", f"=matriz_captura!J{r}", 0.0, ""
-                        ])
-                        filas_preview_interfaz.append({
-                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva_imp_it,
-                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA Importaci\u00f3n Fac {fn_item}",
-                            "D\u00e9bito ($)": 0.0 if es_nc_it else iva_imp_it, "Cr\u00e9dito ($)": iva_imp_it if es_nc_it else 0.0
-                        })
+                    # 3. Hoja Parametrizacion
+                    ws_params = wb.create_sheet(title="Parametrizaci\u00f3n")
+                    headers_params = ["Tipo Comprobante", "", "Impuesto", "Siigo_ID", "Tarifa", "Venta", "Compra", "Dev_Venta", "Dev_Compra"]
+                    ws_params.append(headers_params)
+                    comprobantes = [
+                        "1 - Ajustes contables", "2 - Depreciaci\u00f3n", "3 - Costeo", "4 - Diferidos", "5 - Legalizaci\u00f3n de viaticos",
+                        "6 - Legalizaci\u00f3n de Caja menores", "7 - Obligaciones financieras", "8 - N\u00f3mina", "998 - Cierre a\u00f1o",
+                        "999 - Saldos iniciales", "992 - Comprobante de n\u00f3mina", "993 - Comprobante de n\u00f3mina provisi\u00f3n y seguridad social",
+                        "994 - Comprobante liquidaci\u00f3n de contrato", "995 - Comprobante liquidaci\u00f3n de primas", "996 - Comprobante liquidaci\u00f3n de cesant\u00edas",
+                        "997 - Comprobante desembolso n\u00f3mina", "9 - Recibo de Caja", "10 - Factura de Compra", "11 - Comprobante de Egreso",
+                        "12 - Factura de Venta", "13 - Nota Credito", "14 - Nota de Contabilidad", "15 - Documento soporte electronico",
+                        "777 - Ajustes contables de cartera", "9901 - Traslado de dinero", "16 - FACTURAS DE COMPRA (2)", "17 - NOTA CREDITO DE COMPRA"
+                    ]
+                    impuestos = [
+                        ("IVA 19%", 1, 0.19, "24080601", "24081001", "24082001", "24081002"),
+                        ("IVA Servicios 19%", 1, 0.19, "24080601", "24081501", "24082001", "24082001"),
+                        ("IVA Importaci\u00f3n 19%", 1, 0.19, "24080601", "240835", "24082001", "24081002"),
+                        ("IVA 5%", 2, 0.05, "24080602", "24081003", "24082002", "24081004"),
+                        ("Retefuente 11%", 3, 0.11, "13551509", "23651501", "13551510", "23651502"),
+                        ("Retefuente 10%", 4, 0.1, "13551507", "23652001", "13551508", "23652002"),
+                        ("Retefuente 6%", 5, 0.06, "13551505", "23652501", "13551506", "23652502"),
+                        ("Retefuente 4%", 6, 0.04, "13551503", "23652503", "13551504", "23652504"),
+                        ("Retefuente 3.5%", 18, 0.035, "13551513", "23654004", "13551514", "23654005"),
+                        ("Retefuente 2.5%", 7, 0.025, "13551501", "23654001", "13551502", "23654002"),
+                        ("Retefuente 1% Transporte", 21, 0.01, "13551521", "23652505", "13551521", "23652505"),
+                        ("Retefuente Combustibles 0.1%", 23, 0.001, "13551599", "23654006", "13551599", "23654006"),
+                        ("ReteICA 11.04", 8, 0.01104, "13551801", "23680501", "13551802", "23680502"),
+                        ("ReteICA 13.8", 9, 0.0138, "13551803", "23680503", "13551804", "23680504"),
+                        ("ReteICA 9.66", 10, 0.00966, "13551805", "23680505", "13551806", "23680506"),
+                        ("ReteICA 8", 11, 0.008, "13551807", "23680507", "13551808", "23680508"),
+                        ("ReteICA 7", 12, 0.007, "13551809", "23680509", "13551810", "23680510"),
+                        ("ReteICA 6.9", 13, 0.0069, "13551811", "23680511", "13551812", "23680512"),
+                        ("ReteICA 4.14", 14, 0.00414, "13551813", "23680513", "13551814", "23680514"),
+                        ("ReteIVA 15%", 15, 0.15, "13551701", "23670101", "13551702", "23670102")
+                    ]
+                    filas_preview_params = []
+                    max_len = max(len(comprobantes), len(impuestos))
+                    for idx_row in range(max_len):
+                        c_val = comprobantes[idx_row] if idx_row < len(comprobantes) else ""
+                        if idx_row < len(impuestos):
+                            imp = list(impuestos[idx_row])
+                            r_p = [c_val, ""] + imp
+                        else:
+                            r_p = [c_val, "", "", "", "", "", "", "", ""]
+                        ws_params.append(r_p)
+                        filas_preview_params.append(dict(zip(headers_params, r_p)))
     
-                    # Linea 2.C: Retenciones Asumidas (53152001) cuando Impuestos Asumidos esta activo en Pestana 2
-                    tot_ret_it = round(rfte + rica, 2)
-                    if asume_ret_it and tot_ret_it > 0:
-                        ws_interfaz.append([
-                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                            "53152001", f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
-                            "", "", "", f'="Retenciones Asumidas Fac " & matriz_captura!E{r} & "-" & matriz_captura!F{r}', "",
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!L{r} + matriz_captura!M{r})',
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!L{r} + matriz_captura!M{r}, 0)',
-                            "", 0.0, 0.0, ""
-                        ])
-                        filas_preview_interfaz.append({
-                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": "53152001",
-                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"Retenciones Asumidas Fac {fn_item}",
-                            "D\u00e9bito ($)": 0.0 if es_nc_it else tot_ret_it, "Cr\u00e9dito ($)": tot_ret_it if es_nc_it else 0.0
-                        })
-    
-                    # Linea 3: ReteFuente
-                    if rfte > 0 and cta_rfte:
-                        cod_imp_rfte = CODIGOS_IMPUESTO_SIIGO.get(str(cta_rfte).strip(), "")
-                        ws_interfaz.append([
-                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                            cta_rfte, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
-                            cod_imp_rfte, "", "", f'="ReteFuente Base: " & matriz_captura!J{r}', "",
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!L{r}, 0)',
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!L{r})',
-                            "", f"=matriz_captura!J{r}", 0.0, ""
-                        ])
-                        filas_preview_interfaz.append({
-                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_rfte,
-                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"ReteFuente Base: {base:,.0f}",
-                            "D\u00e9bito ($)": rfte if es_nc_it else 0.0, "Cr\u00e9dito ($)": 0.0 if es_nc_it else rfte
-                        })
-    
-                    # Linea 4: ReteICA
-                    if rica > 0 and cta_rica:
-                        cod_imp_rica = CODIGOS_IMPUESTO_SIIGO.get(str(cta_rica).strip(), "")
-                        ws_interfaz.append([
-                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                            cta_rica, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
-                            cod_imp_rica, "", "", f'="ReteICA Base: " & matriz_captura!J{r}', "",
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!M{r}, 0)',
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!M{r})',
-                            "", f"=matriz_captura!J{r}", 0.0, ""
-                        ])
-                        filas_preview_interfaz.append({
-                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_rica,
-                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"ReteICA Base: {base:,.0f}",
-                            "D\u00e9bito ($)": rica if es_nc_it else 0.0, "Cr\u00e9dito ($)": 0.0 if es_nc_it else rica
-                        })
-    
-                    # Linea 4.B: ReteIVA
-                    if riva > 0:
-                        ws_interfaz.append([
-                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                            "23670101", f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
-                            15, "", "", f'="ReteIVA Base: " & matriz_captura!K{r}', "",
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!N{r}, 0)',
-                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!N{r})',
-                            "", f"=matriz_captura!K{r}", 0.0, ""
-                        ])
-                        filas_preview_interfaz.append({
-                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": "23670101",
-                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"ReteIVA 15%",
-                            "D\u00e9bito ($)": riva if es_nc_it else 0.0, "Cr\u00e9dito ($)": 0.0 if es_nc_it else riva
-                        })
-    
-                    # Linea 5: Cuenta por Pagar (Contrapartida exacta de Pestana 2)
-                    extra_iva_imp_str = f" + {iva_imp_it}" if iva_imp_it > 0 else ""
-                    if asume_ret_it:
-                        formula_deb = f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!J{r} + matriz_captura!K{r}{extra_iva_imp_str}, 0)'
-                        formula_cred = f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!J{r} + matriz_captura!K{r}{extra_iva_imp_str})'
-                        saldo_cxp_num = round(base + iva + iva_imp_it, 2)
-                    else:
-                        formula_deb = f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!J{r} + matriz_captura!K{r}{extra_iva_imp_str} - matriz_captura!L{r} - matriz_captura!M{r} - matriz_captura!N{r}, 0)'
-                        formula_cred = f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!J{r} + matriz_captura!K{r}{extra_iva_imp_str} - matriz_captura!L{r} - matriz_captura!M{r} - matriz_captura!N{r})'
-                        saldo_cxp_num = round(base + iva + iva_imp_it - rfte - rica - riva, 2)
-    
-                    ws_interfaz.append([
-                        f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
-                        f"=matriz_captura!O{r}", f"=matriz_captura!D{r}", 0, "", "", "", "",
-                        f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", 1, f"=matriz_captura!C{r}",
-                        "", "", "", f'="Fac " & matriz_captura!E{r} & "-" & matriz_captura!F{r}', "",
-                        formula_deb, formula_cred, "", 0.0, 0.0, ""
-                    ])
-                    filas_preview_interfaz.append({
-                        "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_c,
-                        "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"CxP Fac {fn_item}",
-                        "D\u00e9bito ($)": saldo_cxp_num if es_nc_it else 0.0, "Cr\u00e9dito ($)": 0.0 if es_nc_it else saldo_cxp_num
-                    })
-                    fila_r += 1
-    
-                # 3. Hoja Parametrizacion
-                ws_params = wb.create_sheet(title="Parametrizaci\u00f3n")
-                headers_params = ["Tipo Comprobante", "", "Impuesto", "Siigo_ID", "Tarifa", "Venta", "Compra", "Dev_Venta", "Dev_Compra"]
-                ws_params.append(headers_params)
-                comprobantes = [
-                    "1 - Ajustes contables", "2 - Depreciaci\u00f3n", "3 - Costeo", "4 - Diferidos", "5 - Legalizaci\u00f3n de viaticos",
-                    "6 - Legalizaci\u00f3n de Caja menores", "7 - Obligaciones financieras", "8 - N\u00f3mina", "998 - Cierre a\u00f1o",
-                    "999 - Saldos iniciales", "992 - Comprobante de n\u00f3mina", "993 - Comprobante de n\u00f3mina provisi\u00f3n y seguridad social",
-                    "994 - Comprobante liquidaci\u00f3n de contrato", "995 - Comprobante liquidaci\u00f3n de primas", "996 - Comprobante liquidaci\u00f3n de cesant\u00edas",
-                    "997 - Comprobante desembolso n\u00f3mina", "9 - Recibo de Caja", "10 - Factura de Compra", "11 - Comprobante de Egreso",
-                    "12 - Factura de Venta", "13 - Nota Credito", "14 - Nota de Contabilidad", "15 - Documento soporte electronico",
-                    "777 - Ajustes contables de cartera", "9901 - Traslado de dinero", "16 - FACTURAS DE COMPRA (2)", "17 - NOTA CREDITO DE COMPRA"
-                ]
-                impuestos = [
-                    ("IVA 19%", 1, 0.19, "24080601", "24081001", "24082001", "24081002"),
-                    ("IVA Servicios 19%", 1, 0.19, "24080601", "24081501", "24082001", "24082001"),
-                    ("IVA Importaci\u00f3n 19%", 1, 0.19, "24080601", "240835", "24082001", "24081002"),
-                    ("IVA 5%", 2, 0.05, "24080602", "24081003", "24082002", "24081004"),
-                    ("Retefuente 11%", 3, 0.11, "13551509", "23651501", "13551510", "23651502"),
-                    ("Retefuente 10%", 4, 0.1, "13551507", "23652001", "13551508", "23652002"),
-                    ("Retefuente 6%", 5, 0.06, "13551505", "23652501", "13551506", "23652502"),
-                    ("Retefuente 4%", 6, 0.04, "13551503", "23652503", "13551504", "23652504"),
-                    ("Retefuente 3.5%", 18, 0.035, "13551513", "23654004", "13551514", "23654005"),
-                    ("Retefuente 2.5%", 7, 0.025, "13551501", "23654001", "13551502", "23654002"),
-                    ("Retefuente 1% Transporte", 21, 0.01, "13551521", "23652505", "13551521", "23652505"),
-                    ("Retefuente Combustibles 0.1%", 23, 0.001, "13551599", "23654006", "13551599", "23654006"),
-                    ("ReteICA 11.04", 8, 0.01104, "13551801", "23680501", "13551802", "23680502"),
-                    ("ReteICA 13.8", 9, 0.0138, "13551803", "23680503", "13551804", "23680504"),
-                    ("ReteICA 9.66", 10, 0.00966, "13551805", "23680505", "13551806", "23680506"),
-                    ("ReteICA 8", 11, 0.008, "13551807", "23680507", "13551808", "23680508"),
-                    ("ReteICA 7", 12, 0.007, "13551809", "23680509", "13551810", "23680510"),
-                    ("ReteICA 6.9", 13, 0.0069, "13551811", "23680511", "13551812", "23680512"),
-                    ("ReteICA 4.14", 14, 0.00414, "13551813", "23680513", "13551814", "23680514"),
-                    ("ReteIVA 15%", 15, 0.15, "13551701", "23670101", "13551702", "23670102")
-                ]
-                filas_preview_params = []
-                max_len = max(len(comprobantes), len(impuestos))
-                for idx_row in range(max_len):
-                    c_val = comprobantes[idx_row] if idx_row < len(comprobantes) else ""
-                    if idx_row < len(impuestos):
-                        imp = list(impuestos[idx_row])
-                        r_p = [c_val, ""] + imp
-                    else:
-                        r_p = [c_val, "", "", "", "", "", "", "", ""]
-                    ws_params.append(r_p)
-                    filas_preview_params.append(dict(zip(headers_params, r_p)))
-    
-                output = io.BytesIO()
-                wb.save(output)
-                output.seek(0)
+                    output = io.BytesIO()
+                    wb.save(output)
+                    output.seek(0)
+                    st.session_state["_siigo_3hojas_bytes"] = output.getvalue()
+                    st.session_state["_siigo_preview_matriz"] = filas_preview_matriz
+                    st.session_state["_siigo_preview_interfaz"] = filas_preview_interfaz
+                    st.session_state["_siigo_preview_params"] = filas_preview_params
+                    st.session_state["_siigo_cache_sig"] = _sig_siigo_actual
+                filas_preview_matriz = st.session_state.get("_siigo_preview_matriz", [])
+                filas_preview_interfaz = st.session_state.get("_siigo_preview_interfaz", [])
+                filas_preview_params = st.session_state.get("_siigo_preview_params", [])
     
                 # Boton principal de descarga ARRIBA para acceso inmediato
                 st.download_button(
                     label=f"\U0001f4e5 1. Descargar Planilla Oficial Siigo Nube (3 Hojas Formuladas: matriz_captura, interfaz_siigo, Parametrizaci\u00f3n) - {empresa['nombre']}",
-                    data=output,
+                    data=st.session_state["_siigo_3hojas_bytes"],
                     file_name=f"Plantilla_Siigo_{empresa['nombre'].replace(' ', '_')}_3_Hojas.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary",
@@ -6613,7 +6652,7 @@ try:
                 with sub_t2:
                     if filas_preview_interfaz:
                         df_prev_int = pd.DataFrame(filas_preview_interfaz)
-                        st.dataframe(df_prev_int.style.format({"D\u00e9bito ($)": "${:,.2f}", "Cr\u00e9dito ($)": "${:,.2f}"}), use_container_width=True, hide_index=True)
+                        st.dataframe(df_prev_int, use_container_width=True, hide_index=True)
                         tot_d_int = df_prev_int["D\u00e9bito ($)"].sum()
                         tot_c_int = df_prev_int["Cr\u00e9dito ($)"].sum()
                         c_m1, c_m2, c_m3 = st.columns(3)
@@ -6626,56 +6665,56 @@ try:
                 st.markdown("---")
                 st.markdown("### \U0001f4ca Libro Auxiliar Contable: Facturas Una a Una y Consolidado")
                 st.write("Reporte administrativo con el detalle factura a factura de la Pesta\u00f1a 2 y las hojas de consolidado por proveedor y cuentas contables:")
-    
-                out_aux = io.BytesIO()
-                with pd.ExcelWriter(out_aux, engine='openpyxl') as writer_aux:
-                    cols_detalle = ["Comprobante Siigo", "Fecha", "Factura", "Proveedor", "NIT Emisor", "Cta Principal", "Categor\u00eda", "Base", "IVA", "ReteFuente", "ReteICA", "Total", "Cta Contrapartida", "Raz\u00f3n Contable", "Soporte PDF Renombrado"]
-                    df_det_export = df_p[[c for c in cols_detalle if c in df_p.columns]].copy()
-    
-                    totales_dict = {
-                        "Comprobante Siigo": "TOTALES CONSOLIDADOS",
-                        "Fecha": "-", "Factura": f"{len(df_det_export)} Docs", "Proveedor": "-", "NIT Emisor": "-",
-                        "Cta Principal": "-", "Categor\u00eda": "-",
-                        "Base": df_det_export["Base"].sum(),
-                        "IVA": df_det_export["IVA"].sum(),
-                        "ReteFuente": df_det_export["ReteFuente"].sum(),
-                        "ReteICA": df_det_export["ReteICA"].sum(),
-                        "Total": df_det_export["Total"].sum(),
-                        "Cta Contrapartida": "-", "Raz\u00f3n Contable": "-", "Soporte PDF Renombrado": "-"
-                    }
-                    df_det_export = pd.concat([df_det_export, pd.DataFrame([totales_dict])], ignore_index=True)
-                    df_det_export.to_excel(writer_aux, sheet_name="Facturas_Una_a_Una", index=False)
-    
-                    df_cons_prov = df_p.groupby(["NIT Emisor", "Proveedor"]).agg({
-                        "Comprobante Siigo": "count",
-                        "Base": "sum",
-                        "IVA": "sum",
-                        "ReteFuente": "sum",
-                        "ReteICA": "sum",
-                        "Total": "sum"
-                    }).reset_index().rename(columns={"Comprobante Siigo": "Cant Facturas"})
-                    df_cons_prov["Neto CxP"] = df_cons_prov["Total"] - df_cons_prov["ReteFuente"] - df_cons_prov["ReteICA"]
-                    df_cons_prov = df_cons_prov.sort_values(by="Total", ascending=False).reset_index(drop=True)
-                    df_cons_prov.to_excel(writer_aux, sheet_name="Consolidado_Proveedores", index=False)
-    
-                    df_cons_cta = df_p.groupby(["Cta Principal", "Categor\u00eda"]).agg({
-                        "Comprobante Siigo": "count",
-                        "Base": "sum",
-                        "IVA": "sum",
-                        "ReteFuente": "sum",
-                        "ReteICA": "sum",
-                        "Total": "sum"
-                    }).reset_index().rename(columns={"Comprobante Siigo": "Cant Facturas"})
-                    df_cons_cta.to_excel(writer_aux, sheet_name="Consolidado_Cuentas_PUC", index=False)
-    
-                out_aux.seek(0)
-                st.download_button(
-                    label=f"\U0001f4e5 2. Descargar Libro de Facturas (Una a Una + Consolidado) - {empresa['nombre']}",
-                    data=out_aux,
-                    file_name=f"Libro_Facturas_Detallado_Y_Consolidado_{empresa['nombre'].replace(' ', '_')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+                if st.checkbox("\U0001f4ca Preparar Descarga de Libro Auxiliar Detallado y Consolidado", value=False, key="chk_gen_libro_aux_tab4"):
+                    out_aux = io.BytesIO()
+                    with pd.ExcelWriter(out_aux, engine='openpyxl') as writer_aux:
+                        cols_detalle = ["Comprobante Siigo", "Fecha", "Factura", "Proveedor", "NIT Emisor", "Cta Principal", "Categor\u00eda", "Base", "IVA", "ReteFuente", "ReteICA", "Total", "Cta Contrapartida", "Raz\u00f3n Contable", "Soporte PDF Renombrado"]
+                        df_det_export = df_p[[c for c in cols_detalle if c in df_p.columns]].copy()
+        
+                        totales_dict = {
+                            "Comprobante Siigo": "TOTALES CONSOLIDADOS",
+                            "Fecha": "-", "Factura": f"{len(df_det_export)} Docs", "Proveedor": "-", "NIT Emisor": "-",
+                            "Cta Principal": "-", "Categor\u00eda": "-",
+                            "Base": df_det_export["Base"].sum(),
+                            "IVA": df_det_export["IVA"].sum(),
+                            "ReteFuente": df_det_export["ReteFuente"].sum(),
+                            "ReteICA": df_det_export["ReteICA"].sum(),
+                            "Total": df_det_export["Total"].sum(),
+                            "Cta Contrapartida": "-", "Raz\u00f3n Contable": "-", "Soporte PDF Renombrado": "-"
+                        }
+                        df_det_export = pd.concat([df_det_export, pd.DataFrame([totales_dict])], ignore_index=True)
+                        df_det_export.to_excel(writer_aux, sheet_name="Facturas_Una_a_Una", index=False)
+        
+                        df_cons_prov = df_p.groupby(["NIT Emisor", "Proveedor"]).agg({
+                            "Comprobante Siigo": "count",
+                            "Base": "sum",
+                            "IVA": "sum",
+                            "ReteFuente": "sum",
+                            "ReteICA": "sum",
+                            "Total": "sum"
+                        }).reset_index().rename(columns={"Comprobante Siigo": "Cant Facturas"})
+                        df_cons_prov["Neto CxP"] = df_cons_prov["Total"] - df_cons_prov["ReteFuente"] - df_cons_prov["ReteICA"]
+                        df_cons_prov = df_cons_prov.sort_values(by="Total", ascending=False).reset_index(drop=True)
+                        df_cons_prov.to_excel(writer_aux, sheet_name="Consolidado_Proveedores", index=False)
+        
+                        df_cons_cta = df_p.groupby(["Cta Principal", "Categor\u00eda"]).agg({
+                            "Comprobante Siigo": "count",
+                            "Base": "sum",
+                            "IVA": "sum",
+                            "ReteFuente": "sum",
+                            "ReteICA": "sum",
+                            "Total": "sum"
+                        }).reset_index().rename(columns={"Comprobante Siigo": "Cant Facturas"})
+                        df_cons_cta.to_excel(writer_aux, sheet_name="Consolidado_Cuentas_PUC", index=False)
+        
+                    out_aux.seek(0)
+                    st.download_button(
+                        label=f"\U0001f4e5 2. Descargar Libro de Facturas (Una a Una + Consolidado) - {empresa['nombre']}",
+                        data=out_aux,
+                        file_name=f"Libro_Facturas_Detallado_Y_Consolidado_{empresa['nombre'].replace(' ', '_')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
             else:
                 st.info("Primero procesa los documentos en la Pestana 1 o carga tu respaldo para habilitar la descarga.")
     
