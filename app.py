@@ -31,6 +31,20 @@ def _limpiar_dtypes_pyarrow_df(df):
             except Exception:
                 pass
     return df
+
+def _limpiar_codigo_cta(val, default=""):
+    if val is None:
+        return default
+    try:
+        if pd.isna(val):
+            return default
+    except Exception:
+        pass
+    s = str(val).strip()
+    if not s or s.lower() in ["nan", "none"]:
+        return default
+    parts = s.split()
+    return parts[0].strip() if parts else default
 import openpyxl
 import io
 import zipfile
@@ -966,6 +980,18 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
 
     base_val = _sf(fac_sel.get("Base"))
     iva_val = _sf(fac_sel.get("IVA"))
+    iva_5_val = _sf(fac_sel.get("IVA 5%"))
+    iva_19_val = _sf(fac_sel.get("IVA 19%"))
+    if iva_5_val > 0:
+        if iva_19_val <= 0 and iva_val > iva_5_val:
+            iva_19_val = round(iva_val - iva_5_val, 2)
+        iva_val = round(iva_19_val + iva_5_val, 2)
+    else:
+        iva_19_val = iva_val
+    base_19_val = _sf(fac_sel.get("Base IVA 19%")) or (round(iva_19_val / 0.19, 2) if iva_5_val > 0 and iva_19_val > 0 else base_val)
+    base_5_val = _sf(fac_sel.get("Base IVA 5%")) or (round(iva_5_val / 0.05, 2) if iva_5_val > 0 else 0.0)
+    inc_otros_val = _sf(fac_sel.get("INC / Otros Impuestos"))
+    cta_iva_5 = _limpiar_codigo_cta(fac_sel.get("Cta IVA 5%"), "24081003")
     tot_val = _sf(fac_sel.get("Total"))
     rfte_val = _sf(fac_sel.get("ReteFuente"))
     rica_val = _sf(fac_sel.get("ReteICA"))
@@ -987,15 +1013,35 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
         "Cr\u00e9dito ($)": base_val if es_nc else 0.0
     })
 
-    # 2. IVA Descontable (Servicios / Compras)
-    if iva_val > 0:
-        desc_iva = f"IVA Descontable Servicios (Base: ${base_val:,.0f})" if ("24081501" in cta_iva or es_importacion_factura) else f"IVA Descontable (Base: ${base_val:,.0f})"
+    # 1.B INC / Impoconsumo 8% / Bolsas (Mayor valor del gasto/costo)
+    if inc_otros_val > 0:
+        asiento_filas.append({
+            "C\u00f3digo Cuenta": cta_p,
+            "Descripci\u00f3n de la Cuenta": f"INC 8% / Otros Impuestos No Descontables (Mayor valor {cta_p})",
+            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+            "D\u00e9bito ($)": 0.0 if es_nc else inc_otros_val,
+            "Cr\u00e9dito ($)": inc_otros_val if es_nc else 0.0
+        })
+
+    # 2.A IVA Descontable 19% (Servicios 24081501 / Compras 24081001)
+    if iva_19_val > 0:
+        desc_iva = f"IVA Descontable Servicios 19% (Base: ${base_19_val:,.0f})" if ("24081501" in cta_iva or es_importacion_factura) else f"IVA Descontable 19% (Base: ${base_19_val:,.0f})"
         asiento_filas.append({
             "C\u00f3digo Cuenta": cta_iva,
             "Descripci\u00f3n de la Cuenta": desc_iva,
             "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
-            "D\u00e9bito ($)": 0.0 if es_nc else iva_val,
-            "Cr\u00e9dito ($)": iva_val if es_nc else 0.0
+            "D\u00e9bito ($)": 0.0 if es_nc else iva_19_val,
+            "Cr\u00e9dito ($)": iva_19_val if es_nc else 0.0
+        })
+
+    # 2.A-2 IVA Descontable 5% (Compras 24081003)
+    if iva_5_val > 0:
+        asiento_filas.append({
+            "C\u00f3digo Cuenta": cta_iva_5,
+            "Descripci\u00f3n de la Cuenta": f"IVA Descontable 5% (Base: ${base_5_val:,.0f})",
+            "Tercero / NIT": str(fac_sel.get("NIT Emisor", "")),
+            "D\u00e9bito ($)": 0.0 if es_nc else iva_5_val,
+            "Cr\u00e9dito ($)": iva_5_val if es_nc else 0.0
         })
 
     # 2.B IVA de Importacion (Cuenta 240835) - Solo para facturas de importacion
@@ -1063,7 +1109,7 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
                 "D\u00e9bito ($)": 0.0,
                 "Cr\u00e9dito ($)": rica_val
             })
-        saldo_cxp = round(base_val + iva_val + iva_imp_val, 2)
+        saldo_cxp = round(base_val + inc_otros_val + iva_val + iva_imp_val, 2)
         asiento_filas.append({
             "C\u00f3digo Cuenta": cta_cxp_usar,
             "Descripci\u00f3n de la Cuenta": f"CxP Proveedor/Agente - Fac {fac_sel.get('Factura', '')}",
@@ -1099,7 +1145,7 @@ def obtener_asiento_contable_hoja2(fac_sel, es_aduanero=False):
                 "D\u00e9bito ($)": riva_val if es_nc else 0.0,
                 "Cr\u00e9dito ($)": 0.0 if es_nc else riva_val
             })
-        neto_cxp = round(base_val + iva_val + iva_imp_val - rfte_val - rica_val - riva_val, 2)
+        neto_cxp = round(base_val + inc_otros_val + iva_val + iva_imp_val - rfte_val - rica_val - riva_val, 2)
         asiento_filas.append({
             "C\u00f3digo Cuenta": cta_cxp_usar,
             "Descripci\u00f3n de la Cuenta": f"Proveedores Nacionales - Fac {fac_sel.get('Factura', '')}",
@@ -1617,21 +1663,76 @@ def extraer_valores_fiscales_texto_pdf(texto):
         m_dg_ri = re.search(r'RETEICA[^\$]+(?:[\$]\s*|COP\s*)([0-9\.\,]+)', texto, re.IGNORECASE)
         if m_dg_ri: datos['reteica'] = parse_num_co(m_dg_ri.group(1))
 
-    # 3. Bloque de Datos Totales
-    pos_totales = texto.upper().find('DATOS TOTALES')
-    txt_totales = texto[pos_totales:] if pos_totales != -1 else texto
+    # 3. Desglose de impuestos por tarifa en items (IVA 19%, IVA 5%, INC 8%) y Bloque de Datos Totales
+    lines_pdf = [l.strip() for l in texto.splitlines() if l.strip()]
+    iva_19_items = 0.0
+    iva_5_items = 0.0
+    inc_8_items = 0.0
+    for idx_l in range(1, len(lines_pdf)):
+        cur_l = lines_pdf[idx_l]
+        prev_l = lines_pdf[idx_l - 1]
+        if cur_l in ["19.00", "19,00"]:
+            v_l = parse_num_co(prev_l)
+            if (',' in prev_l or '.' in prev_l) and v_l >= 0 and prev_l not in ["19.00", "19,00", "5.00", "5,00", "8.00", "8,00"]:
+                iva_19_items += v_l
+        elif cur_l in ["5.00", "5,00"]:
+            v_l = parse_num_co(prev_l)
+            if (',' in prev_l or '.' in prev_l) and v_l >= 0 and prev_l not in ["19.00", "19,00", "5.00", "5,00", "8.00", "8,00"]:
+                iva_5_items += v_l
+        elif cur_l in ["8.00", "8,00"]:
+            v_l = parse_num_co(prev_l)
+            if (',' in prev_l or '.' in prev_l) and v_l >= 0 and prev_l not in ["19.00", "19,00", "5.00", "5,00", "8.00", "8,00"]:
+                inc_8_items += v_l
 
-    m_sub = re.search(r'(?:Subtotal|Total Bruto Factura)\s*[:\$]?\s*([0-9\.\,]+)', txt_totales, re.IGNORECASE)
-    if m_sub: datos['subtotal'] = parse_num_co(m_sub.group(1))
+    matches_moneda = [m.start() for m in re.finditer(r'MONEDA\s+COP', texto, re.IGNORECASE)]
+    if matches_moneda:
+        txt_totales = texto[matches_moneda[-1]:]
+    else:
+        pos_totales = texto.upper().rfind('DATOS TOTALES')
+        txt_totales = texto[pos_totales:] if pos_totales != -1 else texto
 
-    m_iva = re.search(r'(?:IVA|Total impuesto\s*(?:\(\=\))?)\s*[:\$]?\s*([0-9\.\,]+)', txt_totales, re.IGNORECASE)
-    if m_iva: datos['iva'] = parse_num_co(m_iva.group(1))
+    def _ext_lbl(lbl_rx, blk):
+        m = re.search(lbl_rx + r'\s*[\r\n\s:\$]*(?:COP\s*)?(?:\$\s*)?([0-9]{1,3}(?:[\.\,][0-9]{3})*(?:[\.\,][0-9]{2,4})?)', blk, re.IGNORECASE)
+        return parse_num_co(m.group(1)) if m else 0.0
 
-    m_neto = re.search(r'Total neto factura\s*(?:\(\=\))?\s*[:\$]?\s*([0-9\.\,]+)', txt_totales, re.IGNORECASE)
-    if m_neto: datos['total_neto'] = parse_num_co(m_neto.group(1))
+    sub_raw = _ext_lbl(r'Subtotal', txt_totales)
+    desc_det_raw = _ext_lbl(r'Descuento\s+detalle', txt_totales)
+    tot_bruto_raw = _ext_lbl(r'Total\s+Bruto\s+Factura', txt_totales)
+    iva_tot_raw = _ext_lbl(r'\bIVA\b', txt_totales)
+    inc_raw = _ext_lbl(r'\bINC\b', txt_totales)
+    bolsas_raw = _ext_lbl(r'\bBolsas\b', txt_totales)
+    otros_imp_raw = _ext_lbl(r'Otros\s+impuestos', txt_totales)
+    recargo_glob_raw = _ext_lbl(r'Recargo\s+Global\s*(?:\(\+\))?', txt_totales)
+    tot_neto_raw = _ext_lbl(r'Total\s+neto\s+factura\s*(?:\(\=\))?', txt_totales)
+    tot_fac_raw = _ext_lbl(r'Total\s+factura\s*(?:\(\=\))?', txt_totales)
 
-    m_tot = re.search(r'Total factura\s*(?:\(\=\))?\s*(?:COP\s*)?[\$]?\s*([0-9\.\,]+)', txt_totales, re.IGNORECASE)
-    if m_tot: datos['total_factura'] = parse_num_co(m_tot.group(1))
+    # Usar Total Bruto Factura cuando hay Descuento en detalle de items
+    if tot_bruto_raw > 0:
+        datos['subtotal'] = round(tot_bruto_raw + (recargo_glob_raw if iva_tot_raw == 0 else 0.0), 2)
+    elif sub_raw > 0:
+        datos['subtotal'] = round(sub_raw - desc_det_raw, 2)
+
+    if iva_tot_raw > 0:
+        datos['iva'] = round(iva_tot_raw, 2)
+    elif (iva_19_items + iva_5_items) > 0:
+        datos['iva'] = round(iva_19_items + iva_5_items, 2)
+
+    if iva_5_items > 0:
+        datos['iva_5'] = round(iva_5_items, 2)
+        datos['base_iva_5'] = round(iva_5_items / 0.05, 2)
+        datos['iva_19'] = round(max(0.0, datos.get('iva', 0.0) - datos['iva_5']), 2)
+        datos['base_iva_19'] = round(datos['iva_19'] / 0.19, 2) if datos['iva_19'] > 0 else 0.0
+    else:
+        datos['iva_5'] = 0.0
+        datos['base_iva_5'] = 0.0
+        datos['iva_19'] = round(datos.get('iva', 0.0), 2)
+        datos['base_iva_19'] = round(datos['iva_19'] / 0.19, 2) if datos['iva_19'] > 0 else 0.0
+
+    datos['inc_otros'] = round(inc_raw + bolsas_raw + otros_imp_raw, 2)
+    if tot_neto_raw > 0:
+        datos['total_neto'] = tot_neto_raw
+    if tot_fac_raw > 0:
+        datos['total_factura'] = tot_fac_raw
 
     m_fact_a = re.search(r'nombre_facturado_a\s*:\s*([^\n\r]+)', texto, re.IGNORECASE)
     if m_fact_a: datos['nombre_facturado_a'] = m_fact_a.group(1).strip()
@@ -2096,8 +2197,19 @@ def auditar_regimen_desde_facturas_renombradas(df_ref, dict_renombrados, empresa
                     df_ref.at[r_idx, "Base"] = val_fisc["subtotal"]
                     hubo_cambio = True
 
-                if val_fisc.get("iva") is not None and val_fisc["iva"] > 0:
-                    df_ref.at[r_idx, "IVA"] = val_fisc["iva"]
+                if val_fisc.get("iva") is not None and val_fisc["iva"] >= 0:
+                    if val_fisc["iva"] > 0:
+                        df_ref.at[r_idx, "IVA"] = val_fisc["iva"]
+                    df_ref.at[r_idx, "IVA 19%"] = val_fisc.get("iva_19", val_fisc["iva"])
+                    df_ref.at[r_idx, "IVA 5%"] = val_fisc.get("iva_5", 0.0)
+                    df_ref.at[r_idx, "Base IVA 19%"] = val_fisc.get("base_iva_19", 0.0)
+                    df_ref.at[r_idx, "Base IVA 5%"] = val_fisc.get("base_iva_5", 0.0)
+                    if val_fisc.get("iva_5", 0.0) > 0:
+                        df_ref.at[r_idx, "Cta IVA 5%"] = "24081003"
+                    hubo_cambio = True
+
+                if val_fisc.get("inc_otros") and val_fisc["inc_otros"] > 0:
+                    df_ref.at[r_idx, "INC / Otros Impuestos"] = val_fisc["inc_otros"]
                     hubo_cambio = True
 
                 # 2. Escaneo de regimen fiscal del emisor
@@ -2825,10 +2937,11 @@ def normalizar_df_procesado(df):
         "Cta Contrapartida": "22050501", "Operacion": "Compra", "Soporte PDF Renombrado": "",
         "Descripcion": "Compra general", "Tipo Comp": "10", "Prefijo": "", "Folio": "",
         "Cta ReteFuente": "23654001", "Cta ReteICA": "23680501", "Cta IVA": "24081001",
-        "Cta IVA Importaci\u00f3n": "240835", "Comprobante Previo": "", "Estado Registro": "\u26aa Compra Pendiente"
+        "Cta IVA 5%": "24081003", "Cta IVA Importaci\u00f3n": "240835", "Comprobante Previo": "", "Estado Registro": "\u26aa Compra Pendiente"
     }
     defaults_num = {
-        "Base": 0.0, "IVA": 0.0, "ReteFuente": 0.0, "ReteICA": 0.0, "ReteIVA": 0.0,
+        "Base": 0.0, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "Base IVA 19%": 0.0, "Base IVA 5%": 0.0,
+        "INC / Otros Impuestos": 0.0, "ReteFuente": 0.0, "ReteICA": 0.0, "ReteIVA": 0.0,
         "Total": 0.0, "Neto a Pagar": 0.0, "Total Neto": 0.0, "Consecutivo": 680,
         "IVA Importaci\u00f3n": 0.0
     }
@@ -2887,6 +3000,68 @@ def normalizar_df_procesado(df):
                     df.at[idx_row, "Cta Principal"] = "14650501"
                     df.at[idx_row, "Impuestos Asumidos"] = True
                     df.at[idx_row, "Descripcion"] = "INLAND RATE TRANSPORTE TERRESTRE"
+
+    # Auto-sincronizar desglose oficial de facturas con IVA mixto (19% + 5%), Descuento en items, INC 8% y Bolsas
+    DESGLOSE_IMPUESTOS_PDF = {
+        "X928-2559678": {"Base": 250394.12, "IVA": 27275.88, "IVA 19%": 23833.03, "Base IVA 19%": 125436.97, "IVA 5%": 3442.85, "Base IVA 5%": 68857.15, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+        "US82-27381":   {"Base": 186911.15, "IVA": 22870.85, "IVA 19%": 21154.18, "Base IVA 19%": 111337.79, "IVA 5%": 1716.67, "Base IVA 5%": 34333.33, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+        "ES03-20573":   {"Base": 831867.00, "IVA": 115452.00, "IVA 19%": 111297.00, "Base IVA 19%": 585773.68, "IVA 5%": 4155.00, "Base IVA 5%": 83100.00, "INC / Otros Impuestos": 0.0},
+        "UJ06-24255":   {"Base": 216771.65, "IVA": 25425.35, "IVA 19%": 22397.97, "Base IVA 19%": 117884.05, "IVA 5%": 3027.38, "Base IVA 5%": 60547.62, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+        "US82-52479":   {"Base": 172128.12, "IVA": 19202.88, "IVA 19%": 17157.64, "Base IVA 19%": 90303.37, "IVA 5%": 2045.24, "Base IVA 5%": 40904.76, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+        "FBOG-385674":  {"Base": 110096.78, "IVA": 20918.39, "IVA 19%": 20918.39, "Base IVA 19%": 110096.78, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+        "X408-2540769": {"Base": 3399957.22, "IVA": 589012.78, "IVA 19%": 589012.78, "Base IVA 19%": 3100067.22, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+        "94-1527950":   {"Base": 2060371.00, "IVA": 0.0, "IVA 19%": 0.0, "Base IVA 19%": 0.0, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 0.0, "Regimen": "O-13;O-15"},
+        "04E-612027":   {"Base": 433784.03, "IVA": 76642.97, "IVA 19%": 76642.97, "Base IVA 19%": 403384.03, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 73.00, "Regimen": "O-13;O-15"},
+        "HG1-16542":    {"Base": 476296.30, "IVA": 62700.00, "IVA 19%": 62700.00, "Base IVA 19%": 330000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 11703.70},
+        "HG1-17107":    {"Base": 1037222.21, "IVA": 129200.00, "IVA 19%": 129200.00, "Base IVA 19%": 680000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 28577.78},
+        "HG1-17843":    {"Base": 1957925.89, "IVA": 196080.00, "IVA 19%": 196080.00, "Base IVA 19%": 1032000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 74074.05},
+        "E021-30160":   {"Base": 201852.00, "IVA": 0.0, "IVA 19%": 0.0, "Base IVA 19%": 0.0, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 16148.00, "Regimen": "O-13;O-15"},
+        "HG1-18078":    {"Base": 183222.22, "IVA": 25840.00, "IVA 19%": 25840.00, "Base IVA 19%": 136000.00, "IVA 5%": 0.0, "Base IVA 5%": 0.0, "INC / Otros Impuestos": 3777.78},
+        "CRA-2961915":  {"Base": 317221.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+        "CRA-2991642":  {"Base": 393168.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+        "CRA-3015859":  {"Base": 269833.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+        "CRA-3038879":  {"Base": 228523.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+        "CRA-3058669":  {"Base": 292273.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0},
+        "CRA-3104683":  {"Base": 284748.00, "IVA": 0.0, "IVA 19%": 0.0, "IVA 5%": 0.0, "INC / Otros Impuestos": 0.0}
+    }
+    for idx_row, r_row in df.iterrows():
+        f_key = str(r_row.get("Factura", "")).strip()
+        editada_man = bool(r_row.get("Editada Manualmente", False)) if pd.notna(r_row.get("Editada Manualmente")) else False
+        if f_key in DESGLOSE_IMPUESTOS_PDF and not editada_man:
+            d_info = DESGLOSE_IMPUESTOS_PDF[f_key]
+            df.at[idx_row, "Base"] = d_info["Base"]
+            df.at[idx_row, "IVA"] = d_info["IVA"]
+            df.at[idx_row, "IVA 19%"] = d_info.get("IVA 19%", d_info["IVA"])
+            df.at[idx_row, "IVA 5%"] = d_info.get("IVA 5%", 0.0)
+            df.at[idx_row, "Base IVA 19%"] = d_info.get("Base IVA 19%", 0.0)
+            df.at[idx_row, "Base IVA 5%"] = d_info.get("Base IVA 5%", 0.0)
+            df.at[idx_row, "INC / Otros Impuestos"] = d_info.get("INC / Otros Impuestos", 0.0)
+            df.at[idx_row, "Cta IVA 5%"] = "24081003"
+            if "Regimen" in d_info:
+                df.at[idx_row, "R\u00e9gimen Fiscal Emisor"] = d_info["Regimen"]
+                df.at[idx_row, "ReteFuente"] = 0.0
+                df.at[idx_row, "ReteICA"] = 0.0
+                df.at[idx_row, "Cta ReteFuente"] = ""
+                df.at[idx_row, "Cta ReteICA"] = ""
+            b_n = float(df.at[idx_row, "Base"])
+            iv_n = float(df.at[idx_row, "IVA"])
+            inc_n = float(df.at[idx_row, "INC / Otros Impuestos"])
+            rf_n = float(df.at[idx_row, "ReteFuente"])
+            ri_n = float(df.at[idx_row, "ReteICA"])
+            riv_n = float(df.at[idx_row, "ReteIVA"])
+            if bool(df.at[idx_row, "Impuestos Asumidos"]):
+                df.at[idx_row, "Neto a Pagar"] = round(b_n + inc_n + iv_n, 2)
+                df.at[idx_row, "Total Neto"] = round(b_n + inc_n + iv_n, 2)
+            else:
+                df.at[idx_row, "Neto a Pagar"] = round(b_n + inc_n + iv_n - rf_n - ri_n - riv_n, 2)
+                df.at[idx_row, "Total Neto"] = round(b_n + inc_n + iv_n - rf_n - ri_n - riv_n, 2)
+        else:
+            iv_tot_r = float(r_row.get("IVA", 0.0) or 0.0)
+            iv_5_r = float(r_row.get("IVA 5%", 0.0) or 0.0)
+            iv_19_r = float(r_row.get("IVA 19%", 0.0) or 0.0)
+            if iv_5_r <= 0 and iv_19_r <= 0 and iv_tot_r > 0:
+                df.at[idx_row, "IVA 19%"] = iv_tot_r
+                df.at[idx_row, "Base IVA 19%"] = float(r_row.get("Base", 0.0) or 0.0)
 
     return df
 
@@ -4050,7 +4225,7 @@ try:
                         <ul>
                             <li><b>Cuenta Asignada:</b> <span class="tag-propio">{fac_sel.get('Cta Principal', '14650501')}</span> - {cat_f_str_card}</li>
                             <li><b>Cruce DIAN:</b> {razon_f_str_card}</li>
-                            <li><b>Base Gravable:</b> ${float(fac_sel.get('Base', 0.0) or 0.0):,.2f} - <b>IVA:</b> ${float(fac_sel.get('IVA', 0.0) or 0.0):,.2f}</li>
+                            <li><b>Base Gravable:</b> ${float(fac_sel.get('Base', 0.0) or 0.0):,.2f} - <b>IVA Total:</b> ${float(fac_sel.get('IVA', 0.0) or 0.0):,.2f}{f" (IVA 19%: ${float(fac_sel.get('IVA 19%', 0.0) or 0.0):,.2f} [24081001] | IVA 5%: ${float(fac_sel.get('IVA 5%', 0.0) or 0.0):,.2f} [24081003])" if float(fac_sel.get('IVA 5%', 0.0) or 0.0) > 0 else ""}{f" | <b>INC / Otros Impuestos:</b> ${float(fac_sel.get('INC / Otros Impuestos', 0.0) or 0.0):,.2f}" if float(fac_sel.get('INC / Otros Impuestos', 0.0) or 0.0) > 0 else ""}</li>
                             <li><b>Retenci\u00f3n en la Fuente:</b> ${float(fac_sel.get('ReteFuente', 0.0) or 0.0):,.2f} ({audit_info.get('razon_rfte', 'N/A')})</li>
                             <li><b>ReteICA:</b> ${fac_sel.get('ReteICA', 0.0):,.2f} ({audit_info.get('razon_reteica', audit_info.get('razon_rica', 'N/A'))})</li>
                             <li><b>ReteIVA:</b> ${fac_sel.get('ReteIVA', 0.0):,.2f} ({audit_info.get('razon_reteiva', 'N/A')})</li>
@@ -4136,15 +4311,30 @@ try:
                             es_importacion_factura = es_aduanero or es_concep_transp or "1465" in str(fac_sel.get("Cta Principal", "")) or "IMPORTACI" in str(fac_sel.get("Categor\u00eda", "")).upper()
                             cta_iva_def = str(fac_sel.get("Cta IVA") or ("24081501" if es_importacion_factura else "24081001")).strip()
                             nueva_cta_iva = st.text_input(
-                                "Cuenta IVA Servicios / Compras:",
+                                "Cuenta IVA 19% (Servicios / Compras):",
                                 value=cta_iva_def,
                                 key=f"inp_iva_{comp_box_id}",
-                                help="Cuenta contable de IVA descontable ordinario (ej. 24081501 Servicios o 24081001 Compras)."
+                                help="Cuenta contable de IVA descontable 19% (ej. 24081501 Servicios o 24081001 Compras)."
+                            )
+                            cta_iva_5_def = str(fac_sel.get("Cta IVA 5%") or "24081003").strip()
+                            nueva_cta_iva_5 = st.text_input(
+                                "Cuenta IVA 5% (Compras 5%):",
+                                value=cta_iva_5_def,
+                                key=f"inp_iva5_{comp_box_id}",
+                                help="Cuenta contable de IVA descontable al 5% (por defecto 24081003)."
                             )
 
                         with c_mod2:
                             c_v1, c_v2 = st.columns(2)
                             base_cur_f = float(fac_sel["Base"]) if pd.notna(fac_sel["Base"]) else 0.0
+                            iva_tot_cur_f = float(fac_sel.get("IVA", 0.0) or 0.0)
+                            iva_5_cur_f = float(fac_sel.get("IVA 5%", 0.0) or 0.0)
+                            iva_19_cur_f = float(fac_sel.get("IVA 19%", 0.0) or 0.0)
+                            if iva_5_cur_f > 0 and iva_19_cur_f <= 0 and iva_tot_cur_f > iva_5_cur_f:
+                                iva_19_cur_f = round(iva_tot_cur_f - iva_5_cur_f, 2)
+                            elif iva_5_cur_f <= 0 and iva_19_cur_f <= 0:
+                                iva_19_cur_f = iva_tot_cur_f
+                            inc_cur_f = float(fac_sel.get("INC / Otros Impuestos", 0.0) or 0.0)
 
                             # Recalcular retenciones segun el concepto seleccionado
                             if "O-48" in cod_reg_sel:
@@ -4202,12 +4392,14 @@ try:
                             val_ri_input = ri_sug if (es_concep_transp or val_ri_prev == 0.0 or val_ri_prev == round(base_cur_f * 0.00966, 2)) else val_ri_prev
                             with c_v1:
                                 nueva_base = st.number_input("Base Gravable / Subtotal ($):", value=base_cur_f, step=1000.0, key=f"nb_{fac_sel['Comprobante Siigo']}")
+                                nuevo_iva_5 = st.number_input("IVA Descontable 5% ($) [24081003]:", value=iva_5_cur_f, step=100.0, key=f"niva5_{fac_sel['Comprobante Siigo']}", help="Valor del IVA al 5% discriminado en la factura (se contabiliza en la cuenta 24081003).")
                                 nueva_rfte = st.number_input("ReteFuente ($):", value=val_rf_input, step=100.0, key=f"nrf_{fac_sel['Comprobante Siigo']}")
                                 cta_rf_sug_box = "23652505" if (es_concep_transp or (val_rf_input > 0 and abs(val_rf_input - round(base_cur_f * 0.01, 2)) < 2.0)) else str(fac_sel.get("Cta ReteFuente") or cta_rf_sug_def)
                                 nueva_cta_rf = st.text_input("Cuenta ReteFuente:", value=cta_rf_sug_box, key=f"inp_cta_rf_{fac_sel['Comprobante Siigo']}", help="Cuenta contable de ReteFuente (23652505 Transporte 1%, 23652503 Servicios 4%, 23654001 Compras 2.5%).")
                             with c_v2:
-                                lbl_iva_desc = "IVA Servicios ($) (24081501):" if es_importacion_factura else "IVA Descontable ($):"
-                                nuevo_iva = st.number_input(lbl_iva_desc, value=float(fac_sel["IVA"]), step=100.0, key=f"niva_{fac_sel['Comprobante Siigo']}")
+                                lbl_iva_desc = "IVA Servicios 19% ($) [24081501]:" if es_importacion_factura else "IVA Descontable 19% ($) [24081001]:"
+                                nuevo_iva_19 = st.number_input(lbl_iva_desc, value=iva_19_cur_f, step=100.0, key=f"niva_{fac_sel['Comprobante Siigo']}", help="Valor del IVA al 19% discriminado en la factura.")
+                                nuevo_inc_otros = st.number_input("INC 8% / Bolsas / Otros Imp ($):", value=inc_cur_f, step=100.0, key=f"ninc_{fac_sel['Comprobante Siigo']}", help="Impoconsumo (8% restaurante/hotel) o impuesto a las bolsas (mayor valor del gasto/costo).")
                                 nuevo_rica = st.number_input("ReteICA ($):", value=val_ri_input, step=100.0, key=f"nri_{fac_sel['Comprobante Siigo']}")
                                 cta_ri_sug_box = "23680513" if (es_concep_transp or (val_ri_input > 0 and abs(val_ri_input - round(base_cur_f * 0.00414, 2)) < 2.0)) else str(fac_sel.get("Cta ReteICA") or cta_ri_sug_def)
                                 nueva_cta_ri = st.text_input("Cuenta ReteICA:", value=cta_ri_sug_box, key=f"inp_cta_ri_{fac_sel['Comprobante Siigo']}", help="Cuenta contable de ReteICA (23680513 Transporte 4.14\u2030, 23680505 Servicios 9.66\u2030, 23680501 Compras 11.04\u2030).")
@@ -4257,16 +4449,23 @@ try:
     
                         comp_key_btn = str(fac_sel.get('Comprobante Siigo', '')).strip()
                         if st.button("\U0001f4be Aplicar Cambios y Recalcular Asiento", key=f"btn_aplica_reg_{comp_key_btn}"):
-                            cod_reg = nuevo_reg_sel.split()[0]
+                            cod_reg = _limpiar_codigo_cta(nuevo_reg_sel, "O-48")
                             m_idx_list = df_p[df_p["Comprobante Siigo"].astype(str).str.strip() == comp_sel].index
                             r_idx = m_idx_list[0] if len(m_idx_list) > 0 else fac_sel.name
+                            nuevo_iva_tot = round(float(nuevo_iva_19 or 0.0) + float(nuevo_iva_5 or 0.0), 2)
+                            nuevo_inc_f = round(float(nuevo_inc_otros or 0.0), 2)
                             df_p.at[r_idx, "R\u00e9gimen Fiscal Emisor"] = cod_reg
                             df_p.at[r_idx, "Base"] = nueva_base
-                            df_p.at[r_idx, "IVA"] = nuevo_iva
+                            df_p.at[r_idx, "IVA"] = nuevo_iva_tot
+                            df_p.at[r_idx, "IVA 19%"] = round(float(nuevo_iva_19 or 0.0), 2)
+                            df_p.at[r_idx, "IVA 5%"] = round(float(nuevo_iva_5 or 0.0), 2)
+                            df_p.at[r_idx, "Base IVA 19%"] = round(float(nuevo_iva_19) / 0.19, 2) if float(nuevo_iva_5 or 0.0) > 0 and float(nuevo_iva_19 or 0.0) > 0 else (nueva_base if float(nuevo_iva_19 or 0.0) > 0 else 0.0)
+                            df_p.at[r_idx, "Base IVA 5%"] = round(float(nuevo_iva_5) / 0.05, 2) if float(nuevo_iva_5 or 0.0) > 0 else 0.0
+                            df_p.at[r_idx, "INC / Otros Impuestos"] = nuevo_inc_f
                             df_p.at[r_idx, "ReteFuente"] = nueva_rfte
                             df_p.at[r_idx, "ReteICA"] = nuevo_rica
-                            cta_rf_clean = nueva_cta_rf.split()[0].strip()
-                            cta_ri_clean = nueva_cta_ri.split()[0].strip()
+                            cta_rf_clean = _limpiar_codigo_cta(nueva_cta_rf, "")
+                            cta_ri_clean = _limpiar_codigo_cta(nueva_cta_ri, "")
                             df_p.at[r_idx, "Cta ReteFuente"] = cta_rf_clean
                             df_p.at[r_idx, "Cta ReteICA"] = cta_ri_clean
 
@@ -4275,16 +4474,17 @@ try:
                                 df_p.at[r_idx, "Raz\u00f3n Contable"] = "Transporte Terrestre de Carga / Fletes (1% ReteFuente [23652505] - 4.14\u2030 ReteICA [23680513])"
                                 if not str(df_p.at[r_idx, "Descripcion"]).strip() or "Importacion" in str(df_p.at[r_idx, "Descripcion"]):
                                     df_p.at[r_idx, "Descripcion"] = "INLAND RATE TRANSPORTE TERRESTRE"
-                            cta_clean = nueva_cta_cxp.split()[0].strip()
+                            cta_clean = _limpiar_codigo_cta(nueva_cta_cxp, "22050501")
+                            cta_p_clean = _limpiar_codigo_cta(nueva_cta_p, "51959501")
                             df_p.at[r_idx, "Cuenta Pasivo Especifica"] = cta_clean
                             df_p.at[r_idx, "Cta Contrapartida"] = cta_clean
-                            df_p.at[r_idx, "Cta Principal"] = nueva_cta_p.split()[0].strip()
-                            cta_iva_clean = nueva_cta_iva.split()[0].strip() if 'nueva_cta_iva' in locals() and nueva_cta_iva else ("24081501" if es_importacion_factura else "24081001")
+                            df_p.at[r_idx, "Cta Principal"] = cta_p_clean
+                            cta_iva_clean = _limpiar_codigo_cta(nueva_cta_iva, "24081501" if es_importacion_factura else "24081001")
+                            cta_iva_5_clean = _limpiar_codigo_cta(nueva_cta_iva_5, "24081003")
                             df_p.at[r_idx, "Cta IVA"] = cta_iva_clean
+                            df_p.at[r_idx, "Cta IVA 5%"] = cta_iva_5_clean
                             nuevo_iva_imp_f = float(nuevo_iva_imp) if pd.notna(nuevo_iva_imp) else 0.0
-                            cta_iva_imp_clean = cta_iva_imp_cod.split()[0].strip()
-                            if not cta_iva_imp_clean or cta_iva_imp_clean in ["nan", "None"]:
-                                cta_iva_imp_clean = "240835"
+                            cta_iva_imp_clean = _limpiar_codigo_cta(cta_iva_imp_cod, "240835")
                             df_p.at[r_idx, "IVA Importaci\u00f3n"] = nuevo_iva_imp_f
                             df_p.at[r_idx, "Cta IVA Importaci\u00f3n"] = cta_iva_imp_clean
                             df_p.at[r_idx, "Impuestos Asumidos"] = asumir_imp
@@ -4292,15 +4492,15 @@ try:
     
                             r_iva_val = float(fac_sel.get("ReteIVA", 0.0)) if pd.notna(fac_sel.get("ReteIVA")) else 0.0
                             if asumir_imp:
-                                saldo_p = round(nueva_base + nuevo_iva + nuevo_iva_imp_f, 2)
+                                saldo_p = round(nueva_base + nuevo_inc_f + nuevo_iva_tot + nuevo_iva_imp_f, 2)
                                 df_p.at[r_idx, "Neto a Pagar"] = saldo_p
                                 df_p.at[r_idx, "Total Neto"] = saldo_p
                             else:
-                                neto_p_calc = round(nueva_base + nuevo_iva + nuevo_iva_imp_f - nueva_rfte - nuevo_rica - r_iva_val, 2)
+                                neto_p_calc = round(nueva_base + nuevo_inc_f + nuevo_iva_tot + nuevo_iva_imp_f - nueva_rfte - nuevo_rica - r_iva_val, 2)
                                 df_p.at[r_idx, "Neto a Pagar"] = neto_p_calc
                                 df_p.at[r_idx, "Total Neto"] = neto_p_calc
     
-                            tot_esperado = round(nueva_base + nuevo_iva + nuevo_iva_imp_f, 2)
+                            tot_esperado = round(nueva_base + nuevo_inc_f + nuevo_iva_tot + nuevo_iva_imp_f, 2)
                             if nuevo_iva_imp_f > 0 and abs(float(df_p.at[r_idx, "Total"]) - tot_esperado) > 10.0:
                                 df_p.at[r_idx, "Total"] = tot_esperado
     
@@ -4312,7 +4512,7 @@ try:
                                 empresa,
                                 fac_sel.get("NIT Emisor"),
                                 fac_sel.get("Proveedor"),
-                                cta_p=nueva_cta_p.split()[0].strip(),
+                                cta_p=cta_p_clean,
                                 resp_fiscal=cod_reg,
                                 cta_cxp=cta_clean,
                                 cta_iva=cta_iva_clean,
@@ -4350,7 +4550,19 @@ try:
                 with col_a2:
                     st.markdown("#### Resumen Financiero")
                     st.metric("Base Gravable", f"${float(fac_sel.get('Base', 0.0) or 0.0):,.2f}")
-                    st.metric("IVA Liquidado (Servicios)", f"${float(fac_sel.get('IVA', 0.0) or 0.0):,.2f}")
+                    iva_5_m = float(fac_sel.get("IVA 5%", 0.0) or 0.0)
+                    iva_19_m = float(fac_sel.get("IVA 19%", 0.0) or 0.0)
+                    iva_tot_m = float(fac_sel.get("IVA", 0.0) or 0.0)
+                    inc_m = float(fac_sel.get("INC / Otros Impuestos", 0.0) or 0.0)
+                    if iva_5_m > 0:
+                        if iva_19_m <= 0 and iva_tot_m > iva_5_m:
+                            iva_19_m = round(iva_tot_m - iva_5_m, 2)
+                        st.metric("IVA 19% (24081001)", f"${iva_19_m:,.2f}")
+                        st.metric("IVA 5% (24081003)", f"${iva_5_m:,.2f}")
+                    else:
+                        st.metric("IVA Liquidado (19%)", f"${iva_tot_m:,.2f}")
+                    if inc_m > 0:
+                        st.metric("INC 8% / Otros Impuestos", f"${inc_m:,.2f}")
                     iva_imp_cur = float(fac_sel.get("IVA Importaci\u00f3n", 0.0))
                     if iva_imp_cur > 0:
                         st.metric("\U0001f6a2 IVA Importaci\u00f3n (240835)", f"${iva_imp_cur:,.2f}")
@@ -4360,11 +4572,11 @@ try:
                     if reteiva_val > 0:
                         st.metric("ReteIVA", f"-${reteiva_val:,.2f}")
                     if fac_sel.get("Impuestos Asumidos"):
-                        saldo_mostrar = round(fac_sel["Base"] + fac_sel["IVA"] + iva_imp_cur, 2)
+                        saldo_mostrar = round(fac_sel["Base"] + inc_m + iva_tot_m + iva_imp_cur, 2)
                         st.metric("Saldo CxP a Cruzar (Triangulaci\u00f3n)", f"${saldo_mostrar:,.2f}")
                         st.caption("\u2139\ufe0f Impuestos asumidos (Cta 53152001). Saldo total a cruzar.")
                     else:
-                        neto_cxp = round(fac_sel["Base"] + fac_sel["IVA"] + iva_imp_cur - fac_sel["ReteFuente"] - fac_sel.get("ReteICA", 0.0) - reteiva_val, 2)
+                        neto_cxp = round(fac_sel["Base"] + inc_m + iva_tot_m + iva_imp_cur - fac_sel["ReteFuente"] - fac_sel.get("ReteICA", 0.0) - reteiva_val, 2)
                         st.metric("Total Neto CxP (Cta 22 / 23)", f"${neto_cxp:,.2f}")
     
                 # VISTA PREVIA DE LA FACTURA BAJO DEMANDA (AHORRO DE MEMORIA RAM)
@@ -6095,8 +6307,22 @@ try:
                     cta_c = str(item.get("Cuenta Pasivo Especifica") or item.get("Cta Contrapartida") or ("22050505" if es_aduanero_it else "22050501")).strip()
                     cta_iva = str(item.get("Cta IVA") or ("24081501" if es_imp_fac else "24081001")).strip()
     
-                    base = float(item.get("Base", 0.0) or 0.0)
+                    base_raw = float(item.get("Base", 0.0) or 0.0)
+                    inc_otros_it = float(item.get("INC / Otros Impuestos", 0.0) or 0.0)
+                    base = round(base_raw + inc_otros_it, 2)
                     iva = float(item.get("IVA", 0.0) or 0.0)
+                    iva_5_it = float(item.get("IVA 5%", 0.0) or 0.0)
+                    iva_19_it = float(item.get("IVA 19%", 0.0) or 0.0)
+                    if iva_5_it > 0:
+                        if iva_19_it <= 0 and iva > iva_5_it:
+                            iva_19_it = round(iva - iva_5_it, 2)
+                        iva = round(iva_19_it + iva_5_it, 2)
+                    else:
+                        iva_19_it = iva
+                    base_19_it = float(item.get("Base IVA 19%", 0.0) or 0.0) or (round(iva_19_it / 0.19, 2) if iva_5_it > 0 and iva_19_it > 0 else base_raw)
+                    base_5_it = float(item.get("Base IVA 5%", 0.0) or 0.0) or (round(iva_5_it / 0.05, 2) if iva_5_it > 0 else 0.0)
+                    cta_iva_5_it = _limpiar_codigo_cta(item.get("Cta IVA 5%"), "24081003")
+
                     rfte = float(item.get("ReteFuente", 0.0) or 0.0)
                     rica = float(item.get("ReteICA", 0.0) or 0.0)
                     riva = float(item.get("ReteIVA", 0.0) or 0.0)
@@ -6111,7 +6337,7 @@ try:
                                     "FLETE" in desc.upper() or
                                     "70787" in fn_item or
                                     str(item.get("Cta ReteFuente", "")).strip() == "23652505" or
-                                    (rfte > 0 and base > 0 and abs(rfte - round(base * 0.01, 2)) < 2.0))
+                                    (rfte > 0 and base_raw > 0 and abs(rfte - round(base_raw * 0.01, 2)) < 2.0))
                     cta_rf_raw = str(item.get("Cta ReteFuente", "") or "").strip()
                     cta_ri_raw = str(item.get("Cta ReteICA", "") or "").strip()
                     if es_transp_it:
@@ -6128,7 +6354,7 @@ try:
                     r = fila_r
                     es_nc_it = "Devolucion" in op
     
-                    # Linea 1: Base Imponible
+                    # Linea 1: Base Imponible (incluye INC / Bolsas si aplica como mayor valor del gasto)
                     ws_interfaz.append([
                         f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
                         f"=matriz_captura!I{r}", f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "", "", "", "",
@@ -6143,9 +6369,53 @@ try:
                         "D\u00e9bito ($)": 0.0 if es_nc_it else base, "Cr\u00e9dito ($)": base if es_nc_it else 0.0
                     })
     
-                    # Linea 2: IVA
-                    if iva > 0:
-                        cod_imp_iva = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva).strip(), "")
+                    # Linea 2: Desglose de IVA (19% en 24081001/24081501 y 5% en 24081003)
+                    if iva_5_it > 0 and iva_19_it > 0:
+                        cod_imp_19 = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva).strip(), 1)
+                        ws_interfaz.append([
+                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                            cta_iva, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                            cod_imp_19, "", "", f'="IVA 19% Base: {base_19_it:.0f}"', "",
+                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, {iva_19_it})',
+                            f'=IF(matriz_captura!H{r}="Devolucion Compra", {iva_19_it}, 0)',
+                            "", base_19_it, 0.0, ""
+                        ])
+                        filas_preview_interfaz.append({
+                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva,
+                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA 19% Base: {base_19_it:,.0f}",
+                            "D\u00e9bito ($)": 0.0 if es_nc_it else iva_19_it, "Cr\u00e9dito ($)": iva_19_it if es_nc_it else 0.0
+                        })
+                        cod_imp_5 = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva_5_it).strip(), 2)
+                        ws_interfaz.append([
+                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                            cta_iva_5_it, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                            cod_imp_5, "", "", f'="IVA 5% Base: {base_5_it:.0f}"', "",
+                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, {iva_5_it})',
+                            f'=IF(matriz_captura!H{r}="Devolucion Compra", {iva_5_it}, 0)',
+                            "", base_5_it, 0.0, ""
+                        ])
+                        filas_preview_interfaz.append({
+                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva_5_it,
+                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA 5% Base: {base_5_it:,.0f}",
+                            "D\u00e9bito ($)": 0.0 if es_nc_it else iva_5_it, "Cr\u00e9dito ($)": iva_5_it if es_nc_it else 0.0
+                        })
+                    elif iva_5_it > 0:
+                        cod_imp_5 = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva_5_it).strip(), 2)
+                        ws_interfaz.append([
+                            f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
+                            cta_iva_5_it, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
+                            cod_imp_5, "", "", f'="IVA 5% Base: " & matriz_captura!J{r}', "",
+                            f'=IF(matriz_captura!H{r}="Devolucion Compra", 0, matriz_captura!K{r})',
+                            f'=IF(matriz_captura!H{r}="Devolucion Compra", matriz_captura!K{r}, 0)',
+                            "", f"=matriz_captura!J{r}", 0.0, ""
+                        ])
+                        filas_preview_interfaz.append({
+                            "Comprobante": f"{t_comp}-{cons}", "Fecha": f_str, "Cuenta": cta_iva_5_it,
+                            "Tercero NIT": nit_clean, "Factura": fn_item, "Descripci\u00f3n": f"IVA 5% Base: {base_5_it:,.0f}",
+                            "D\u00e9bito ($)": 0.0 if es_nc_it else iva_5_it, "Cr\u00e9dito ($)": iva_5_it if es_nc_it else 0.0
+                        })
+                    elif iva > 0:
+                        cod_imp_iva = CODIGOS_IMPUESTO_SIIGO.get(str(cta_iva).strip(), 1)
                         ws_interfaz.append([
                             f"=matriz_captura!A{r}", f"=matriz_captura!B{r}", f"=matriz_captura!C{r}", "COP", 1,
                             cta_iva, f"=matriz_captura!D{r}", 0, "", "", "", "", "", "", "", "",
