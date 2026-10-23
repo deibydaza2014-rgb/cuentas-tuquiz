@@ -10,23 +10,58 @@ try:
     pd.options.future.infer_string = False
 except Exception:
     pass
+import sys
+import numpy as np
+try:
+    import numpy.core
+    import numpy.core.multiarray
+    import numpy.core.numeric
+    import numpy.core.umath
+    if "numpy._core" not in sys.modules:
+        sys.modules["numpy._core"] = numpy.core
+    if "numpy._core.multiarray" not in sys.modules:
+        sys.modules["numpy._core.multiarray"] = numpy.core.multiarray
+    if "numpy._core.numeric" not in sys.modules:
+        sys.modules["numpy._core.numeric"] = numpy.core.numeric
+    if "numpy._core.umath" not in sys.modules:
+        sys.modules["numpy._core.umath"] = numpy.core.umath
+except Exception:
+    pass
+
 try:
     def _safe_sd_init(self, storage=None, *args, **kwargs):
         if storage is None or storage not in ("python", "pyarrow", "pyarrow_numpy"):
             storage = "python"
         self.storage = storage
+        na_val = args[0] if len(args) >= 1 else kwargs.get("na_value", pd.NA)
         try:
-            if not hasattr(self, "_na_value"):
-                self._na_value = pd.NA
+            self._na_value = na_val
         except Exception:
             pass
     pd.StringDtype.__init__ = _safe_sd_init
 except Exception:
     pass
 
+def _safe_pickle_loads(raw_bytes):
+    if not raw_bytes:
+        return None
+    try:
+        return pickle.loads(raw_bytes)
+    except Exception:
+        class _CompatUnpickler(pickle.Unpickler):
+            def find_class(self, module, name):
+                if module.startswith("numpy._core"):
+                    module = module.replace("numpy._core", "numpy.core", 1)
+                return super().find_class(module, name)
+        return _CompatUnpickler(io.BytesIO(raw_bytes)).load()
+
 def _limpiar_dtypes_pyarrow_df(df):
     if df is None or not isinstance(df, pd.DataFrame):
         return df
+    try:
+        df.columns = pd.Index([str(c) for c in df.columns], dtype=object)
+    except Exception:
+        pass
     for col in df.columns:
         dt_str = str(df[col].dtype).lower()
         if "string" in dt_str or "arrow" in dt_str:
@@ -832,7 +867,7 @@ try:
             with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
                 df_proc = None
                 if "df_procesado.pkl" in zf.namelist():
-                    df_proc = pickle.loads(zf.read("df_procesado.pkl"))
+                    df_proc = _safe_pickle_loads(zf.read("df_procesado.pkl"))
                 excel_b = zf.read("excel_original.xlsx") if "excel_original.xlsx" in zf.namelist() else None
                 zip_p = zf.read("paquete_facturas.zip") if "paquete_facturas.zip" in zf.namelist() else None
                 excel_n = "Reporte_Restaurado.xlsx"
@@ -2828,20 +2863,46 @@ try:
                             json.dump(mem_rest, f_mem, ensure_ascii=False, indent=2)
                     except Exception:
                         pass
+                _univ_json = None
+                if "datos_contables_universal.json" in namelist:
+                    try:
+                        _univ_json = json.loads(zf.read("datos_contables_universal.json").decode("utf-8"))
+                    except Exception:
+                        _univ_json = None
                 if "df_procesado.pkl" in namelist:
-                    df_loaded = pickle.loads(zf.read("df_procesado.pkl"))
-                    st.session_state["df_procesado"] = normalizar_df_procesado(_limpiar_dtypes_pyarrow_df(df_loaded))
+                    try:
+                        df_loaded = _safe_pickle_loads(zf.read("df_procesado.pkl"))
+                    except Exception:
+                        df_loaded = pd.DataFrame(_univ_json["df_procesado"]) if (_univ_json and "df_procesado" in _univ_json) else None
+                    if df_loaded is not None:
+                        st.session_state["df_procesado"] = normalizar_df_procesado(_limpiar_dtypes_pyarrow_df(df_loaded))
+                elif _univ_json and "df_procesado" in _univ_json:
+                    st.session_state["df_procesado"] = normalizar_df_procesado(_limpiar_dtypes_pyarrow_df(pd.DataFrame(_univ_json["df_procesado"])))
                 if "excel_original.xlsx" in namelist:
                     st.session_state["excel_bytes"] = zf.read("excel_original.xlsx")
                 if "asientos_triangulacion.pkl" in namelist:
-                    as_loaded = pickle.loads(zf.read("asientos_triangulacion.pkl"))
+                    try:
+                        as_loaded = _safe_pickle_loads(zf.read("asientos_triangulacion.pkl"))
+                    except Exception:
+                        as_loaded = {k: pd.DataFrame(v) for k, v in _univ_json.get("asientos_triangulacion", {}).items()} if _univ_json else {}
                     if isinstance(as_loaded, dict):
                         for k_as, v_as in as_loaded.items():
                             if isinstance(v_as, pd.DataFrame):
                                 as_loaded[k_as] = _limpiar_dtypes_pyarrow_df(v_as)
                     st.session_state["asientos_triangulacion_por_factura"] = as_loaded
                 if "paquetes_importacion.pkl" in namelist:
-                    pqs_loaded = pickle.loads(zf.read("paquetes_importacion.pkl"))
+                    try:
+                        pqs_loaded = _safe_pickle_loads(zf.read("paquetes_importacion.pkl"))
+                    except Exception:
+                        pqs_loaded = {}
+                        if _univ_json and "paquetes_importacion" in _univ_json:
+                            for pk_s, pv_s in _univ_json["paquetes_importacion"].items():
+                                pk_i = int(pk_s) if str(pk_s).isdigit() else pk_s
+                                pv_c = dict(pv_s)
+                                for df_k in ["terceros", "asiento_fijo", "asiento_aprobado"]:
+                                    if df_k in pv_c and isinstance(pv_c[df_k], list):
+                                        pv_c[df_k] = pd.DataFrame(pv_c[df_k])
+                                pqs_loaded[pk_i] = pv_c
                     if isinstance(pqs_loaded, dict):
                         as_map = st.session_state.get("asientos_triangulacion_por_factura", {})
                         for pq_k, pq_v in pqs_loaded.items():
@@ -3296,7 +3357,7 @@ try:
                             st.success(f"\u00a1Sesi\u00f3n restaurada con \u00e9xito desde {archivo_zip_restaurar.name}!")
                             st.rerun()
                         else:
-                            st.error("No se pudo restaurar el archivo de respaldo.")
+                            st.error(f"No se pudo restaurar el archivo de respaldo: {st.session_state.get('_ultimo_error_respaldo', '')}")
     
     st.markdown("---")
     
