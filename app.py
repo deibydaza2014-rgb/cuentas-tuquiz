@@ -332,8 +332,9 @@ try:
                         st.error("Ingresa usuario y contrasena.")
         st.stop()
 
-    # PANTALLA 2: SELECTOR DE EMPRESAS CON RESPONSABILIDADES RUT
-    EMPRESAS_DISPONIBLES = [
+    # PANTALLA 2: SELECTOR MULTI-EMPRESA ESCALABLE CON AISLAMIENTO EN DISCO Y GESTION DE RAM
+    PATH_EMPRESAS_JSON = os.path.join(DATA_DIR, "empresas_registradas.json")
+    EMPRESAS_BASE = [
         {
             "nombre": "INDUMAQ ER SAS",
             "nit": "901.346.412-5",
@@ -347,9 +348,59 @@ try:
         }
     ]
 
+    def cargar_empresas_registradas():
+        emps = list(EMPRESAS_BASE)
+        nits_vistos = {re.sub(r"\D", "", e["nit"]) for e in emps}
+        if os.path.exists(PATH_EMPRESAS_JSON):
+            try:
+                with open(PATH_EMPRESAS_JSON, "r", encoding="utf-8") as fe:
+                    guardadas = json.load(fe)
+                if isinstance(guardadas, list):
+                    for g in guardadas:
+                        if isinstance(g, dict) and g.get("nit"):
+                            nc = re.sub(r"\D", "", str(g.get("nit", "")))
+                            if nc and nc not in nits_vistos:
+                                nits_vistos.add(nc)
+                                emps.append(g)
+            except Exception:
+                pass
+        return emps
+
+    def guardar_nueva_empresa(nueva_emp):
+        emps = cargar_empresas_registradas()
+        nc_new = re.sub(r"\D", "", str(nueva_emp.get("nit", "")))
+        emps = [e for e in emps if re.sub(r"\D", "", str(e.get("nit", ""))) != nc_new]
+        emps.append(nueva_emp)
+        try:
+            with open(PATH_EMPRESAS_JSON, "w", encoding="utf-8") as fe:
+                json.dump(emps, fe, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        return emps
+
+    def liberar_memoria_cambio_empresa():
+        """Limpia buffers pesados de RAM al cambiar de empresa para que la plataforma soporte ilimitadas empresas sin caerse."""
+        import gc
+        keys_limpiar = [
+            "df_procesado", "dict_pdfs", "raw_uploaded_pdfs", "excel_bytes", "excel_nombre",
+            "zip_pdfs", "job_actual_id", "_ultimo_excel_proc_sig", "_ultimo_pdfs_proc_sig",
+            "paquetes_importacion", "asientos_triangulacion_por_factura", "facturas_no_contabilizar",
+            "_ultimo_guardado_manual", "_cached_respaldo_bytes", "_cached_respaldo_sig",
+            "_siigo_cache_sig", "_siigo_3hojas_bytes", "_siigo_preview_matriz",
+            "_siigo_preview_interfaz", "_siigo_preview_params", "factura_seleccionada_auditoria",
+            "sel_factura_auditoria_box"
+        ]
+        for k in list(st.session_state.keys()):
+            if k in keys_limpiar or k.startswith(("paquete_listo_", "paquete_destino_siigo_", "enviar_gp_", "enviar_h2_", "enviar_nd_", "asiento_fijo_pq_")):
+                st.session_state.pop(k, None)
+        _MEM_TEXT_CACHE.clear()
+        gc.collect()
+
+    EMPRESAS_DISPONIBLES = cargar_empresas_registradas()
+
     if not st.session_state["empresa_activa"]:
-        st.title("Seleccion de Empresa")
-        st.caption("Selecciona la entidad sobre la cual vas a trabajar:")
+        st.title("Seleccion de Empresa (Multi-Empresa Escalable)")
+        st.caption("Cada empresa guarda sus facturas, paquetes y aprendizaje en su propio espacio aislado en disco (0 saturacion de RAM):")
 
         c1, c2 = st.columns(2)
         for i, emp in enumerate(EMPRESAS_DISPONIBLES):
@@ -359,20 +410,50 @@ try:
                 <div class="card-box">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <h3 style="margin:0; color:#0f172a;">\U0001f3e2 {emp['nombre']}</h3>
-                        <span class="{emp['badge']}">{emp['estado']}</span>
+                        <span class="{emp.get('badge', 'badge-active')}">{emp.get('estado', 'ACTIVA')}</span>
                     </div>
-                    <p style="margin:8px 0 2px 0; color:#475569;"><b>NIT:</b> {emp['nit']} - <b>Regimen:</b> {emp['regimen']}</p>
-                    <p style="margin:2px 0 14px 0; color:#64748b; font-size:14px;">{emp['actividad']}</p>
+                    <p style="margin:8px 0 2px 0; color:#475569;"><b>NIT:</b> {emp['nit']} - <b>Regimen:</b> {emp.get('regimen', 'Responsable de IVA')}</p>
+                    <p style="margin:2px 0 14px 0; color:#64748b; font-size:14px;">{emp.get('actividad', 'Actividad Comercial')}</p>
                 </div>
                 """, unsafe_allow_html=True)
-                if emp["estado"] == "ACTIVA":
-                    if st.button(f"Ingresar a {emp['nombre']}", key=f"btn_emp_{i}"):
+                if emp.get("estado", "ACTIVA") == "ACTIVA":
+                    if st.button(f"Ingresar a {emp['nombre']}", key=f"btn_emp_{i}", use_container_width=True):
+                        liberar_memoria_cambio_empresa()
                         st.session_state["empresa_activa"] = emp
                         st.session_state["proceso_activo"] = "facturacion"
-                        # registrar_actividad_sesion(emp)
                         st.rerun()
                 else:
-                    st.button(f"Pendiente Datos / Parametrizacion ({emp['estado']})", key=f"btn_emp_{i}", disabled=True)
+                    st.button(f"Pendiente Datos / Parametrizacion ({emp.get('estado', '')})", key=f"btn_emp_{i}", disabled=True)
+
+        st.markdown("---")
+        with st.expander("\u2795 Agregar Nueva Empresa al Ecosistema (Espacio Aislado en Disco)", expanded=False):
+            with st.form("form_nueva_empresa"):
+                ce1, ce2 = st.columns(2)
+                with ce1:
+                    nom_ne = st.text_input("Razon Social de la Empresa:", placeholder="Ej. COMERCIALIZADORA XYZ SAS")
+                    nit_ne = st.text_input("NIT (con digito de verificacion):", placeholder="Ej. 900.123.456-7")
+                with ce2:
+                    act_ne = st.text_input("Actividad Economica Principal:", value="Comercio y Servicios")
+                    reg_ne = st.selectbox("Regimen Tributario:", ["Responsable de IVA (O-48)", "Gran Contribuyente (O-13)", "Autorretenedor (O-15)", "Gran Contribuyente y Autorretenedor (O-13;O-15)", "Regimen Simple (O-47)"])
+                sub_ne = st.form_submit_button("\U0001f4be Registrar y Activar Empresa")
+                if sub_ne:
+                    if nom_ne.strip() and nit_ne.strip():
+                        nueva_e = {
+                            "nombre": nom_ne.strip().upper(),
+                            "nit": nit_ne.strip(),
+                            "actividad": act_ne.strip() or "Comercio General",
+                            "regimen": reg_ne,
+                            "es_gran_contribuyente": "O-13" in reg_ne,
+                            "es_autorretenedor": "O-15" in reg_ne,
+                            "responsabilidades_rut": ["O-48"],
+                            "estado": "ACTIVA",
+                            "badge": "badge-active"
+                        }
+                        guardar_nueva_empresa(nueva_e)
+                        st.success(f"Empresa {nueva_e['nombre']} creada exitosamente en su carpeta dedicada.")
+                        st.rerun()
+                    else:
+                        st.warning("Ingresa Razon Social y NIT.")
         st.stop()
 
     empresa = st.session_state["empresa_activa"]
@@ -423,6 +504,7 @@ try:
             st.caption(f"NIT: {empresa['nit']} - Selecciona el modulo de trabajo que deseas ejecutar:")
         with col_t2:
             if st.button("Cambiar de Empresa"):
+                liberar_memoria_cambio_empresa()
                 st.session_state["empresa_activa"] = None
                 st.session_state["proceso_activo"] = None
                 st.rerun()
@@ -1208,8 +1290,9 @@ try:
         cta_rf_raw = str(fac_sel.get("Cta ReteFuente", "")).strip()
         cta_ri_raw = str(fac_sel.get("Cta ReteICA", "")).strip()
 
-        # Si es transporte o la retencion es del 1%, la cuenta legal ES 23652505
-        if es_transp_as or (rfte_val > 0 and base_val > 0 and abs(rfte_val - round(base_val * 0.01, 2)) < 2.0):
+        editada_man_h2 = bool(fac_sel.get("Editada Manualmente", False))
+        # Si es transporte y NO fue editada manualmente para quitarle la retencion
+        if not editada_man_h2 and (es_transp_as or (rfte_val > 0 and base_val > 0 and abs(rfte_val - round(base_val * 0.01, 2)) < 2.0)):
             if rfte_val == round(base_val * 0.04, 2) or rfte_val == 0.0:
                 rfte_val = round(base_val * 0.01, 2)
             if rica_val == round(base_val * 0.00966, 2) or rica_val == 0.0:
@@ -1218,8 +1301,8 @@ try:
             cta_ri_usar = "23680513"
             cta_p = "14650501"
         else:
-            cta_rf_usar = cta_rf_raw if (cta_rf_raw and cta_rf_raw not in ["nan", "None", ""]) else ("23652503" if es_aduanero else "23654001")
-            cta_ri_usar = cta_ri_raw if (cta_ri_raw and cta_ri_raw not in ["nan", "None", ""]) else ("23680505" if es_aduanero else "23680501")
+            cta_rf_usar = cta_rf_raw if (cta_rf_raw and cta_rf_raw not in ["nan", "None", ""]) else ("" if rfte_val <= 0 else ("23652503" if es_aduanero else "23654001"))
+            cta_ri_usar = cta_ri_raw if (cta_ri_raw and cta_ri_raw not in ["nan", "None", ""]) else ("" if rica_val <= 0 else ("23680505" if es_aduanero else "23680501"))
 
         if cta_p == "146505":
             cta_p = "14650501"
@@ -3618,21 +3701,24 @@ try:
             st.session_state["_ultimo_error_respaldo"] = str(e)
             return False
 
-    # Auto-restaurar al inicio si la memoria esta vacia (migrando primero el respaldo del 23/10 con los 48 excluidos y 47 editados de Hoja 2)
+    # Auto-restaurar al inicio si la memoria esta vacia (aislado por NIT de empresa)
     if ("df_procesado" not in st.session_state or st.session_state["df_procesado"] is None) and not st.session_state.get("_usuario_limpio_sesion"):
         _nit_init = re.sub(r'\D', '', str(empresa.get("nit", "9013464125"))) or "9013464125"
-        _flag_migracion = os.path.join(DATA_DIR, _nit_init, "estado_manual", "_avance_oct23_48excl_v4.ok")
-        if not os.path.exists(_flag_migracion):
-            cargar_respaldo_integrado_50_paquetes(empresa)
-        elif not cargar_estado_manual(empresa):
-            cargar_respaldo_integrado_50_paquetes(empresa)
+        if _nit_init == "9013464125":
+            _flag_migracion = os.path.join(DATA_DIR, _nit_init, "estado_manual", "_avance_oct23_48excl_v4.ok")
+            if not os.path.exists(_flag_migracion):
+                cargar_respaldo_integrado_50_paquetes(empresa)
+            elif not cargar_estado_manual(empresa):
+                cargar_respaldo_integrado_50_paquetes(empresa)
+            else:
+                st.session_state["_regimenes_conocidos_aplicados_v1"] = True
+                dict_renom_auto = DiskBackedPDFDict("renom_pdfs")
+                if len(dict_renom_auto) > 0 and not st.session_state.get("dict_pdfs"):
+                    st.session_state["dict_pdfs"] = dict_renom_auto
+                    st.session_state["raw_uploaded_pdfs"] = dict_renom_auto
+                    st.session_state["total_zip_pdfs"] = len(dict_renom_auto)
         else:
-            st.session_state["_regimenes_conocidos_aplicados_v1"] = True
-            dict_renom_auto = DiskBackedPDFDict("renom_pdfs")
-            if len(dict_renom_auto) > 0 and not st.session_state.get("dict_pdfs"):
-                st.session_state["dict_pdfs"] = dict_renom_auto
-                st.session_state["raw_uploaded_pdfs"] = dict_renom_auto
-                st.session_state["total_zip_pdfs"] = len(dict_renom_auto)
+            cargar_estado_manual(empresa)
 
     # BANNER DE CONTROL Y GUARDADO MANUAL
     if "df_procesado" in st.session_state and st.session_state["df_procesado"] is not None:
@@ -4667,40 +4753,104 @@ try:
                         st.success(f"\u00a1Se han marcado {len(nuevas_ex)} facturas como NO contabilizables!")
                         st.rerun()
     
+                # BARRA DE ACELERACION DE AUDITORIA: FILTROS Y NAVEGACION 1-CLIC
+                n_tot_f = len(df_p)
+                mask_excl_f = df_p["Factura"].astype(str).str.strip().isin(cur_no_contab) | (df_p["No Contabilizar"] == True)
+                mask_edit_f = (df_p["Editada Manualmente"] == True) & (~mask_excl_f)
+                mask_pend_f = (~mask_excl_f) & (~mask_edit_f)
+                n_pend_f = int(mask_pend_f.sum())
+                n_edit_f = int(mask_edit_f.sum())
+                n_excl_f = int(mask_excl_f.sum())
+
+                c_fbar1, c_fbar2 = st.columns([2.8, 1.4])
+                with c_fbar1:
+                    filtro_aud_modo = st.radio(
+                        "\U0001f680 Filtro Rapido de Revision:",
+                        [
+                            f"\U0001f4cb Todas ({n_tot_f})",
+                            f"\u23f3 Pendientes por Revisar ({n_pend_f})",
+                            f"\u270f\ufe0f Revisadas / Editadas ({n_edit_f})",
+                            f"\U0001f6ab No Contabilizar ({n_excl_f})"
+                        ],
+                        horizontal=True,
+                        key="rad_filtro_rapido_hoja2"
+                    )
+                with c_fbar2:
+                    progreso_pct = round(((n_edit_f + n_excl_f) / max(1, n_tot_f)) * 100, 1)
+                    st.progress(min(1.0, (n_edit_f + n_excl_f) / max(1, n_tot_f)), text=f"Avance Revision: {n_edit_f + n_excl_f}/{n_tot_f} ({progreso_pct}%)")
+
+                if "Pendientes" in filtro_aud_modo and n_pend_f > 0:
+                    df_p_vista = df_p[mask_pend_f]
+                elif "Revisadas" in filtro_aud_modo and n_edit_f > 0:
+                    df_p_vista = df_p[mask_edit_f]
+                elif "No Contabilizar" in filtro_aud_modo and n_excl_f > 0:
+                    df_p_vista = df_p[mask_excl_f]
+                else:
+                    df_p_vista = df_p
+
                 opciones_fac = []
-                for idx_r, r in df_p.iterrows():
+                comps_en_vista = []
+                for idx_r, r in df_p_vista.iterrows():
                     fn = str(r.get("Factura") or f"Doc_{idx_r+1}").strip()
-                    tag_ex = " \U0001f6ab [NO CONTABILIZAR]" if (fn in cur_no_contab or bool(r.get("No Contabilizar", False))) else ""
+                    es_ex_r = fn in cur_no_contab or bool(r.get("No Contabilizar", False))
+                    es_ed_r = bool(r.get("Editada Manualmente", False))
+                    tag_ex = " \U0001f6ab [NO CONTABILIZAR]" if es_ex_r else (" \u2705 [REVISADA]" if es_ed_r else " \u23f3")
                     comp_str = str(r.get("Comprobante Siigo") or f"Comp {idx_r+1}").strip()
                     fecha_str = str(r.get("Fecha") or "").strip()
                     prov_str = str(r.get("Proveedor") or "Proveedor").strip()[:24]
                     try: tot_num = float(r.get("Total", 0.0) or 0.0)
                     except Exception: tot_num = 0.0
                     opciones_fac.append(f"[{comp_str}] {fecha_str} - {fn}{tag_ex} - {prov_str} (${tot_num:,.0f})")
-    
-                # Preservar la factura seleccionada para que no vuelva a la primera tras guardar cambios o editar
+                    comps_en_vista.append(comp_str)
+
                 comp_activo_guardado = st.session_state.get("factura_seleccionada_auditoria")
                 idx_fac_sel = 0
-                if comp_activo_guardado:
-                    for i_f, op_str in enumerate(opciones_fac):
-                        if f"[{comp_activo_guardado}]" in op_str:
-                            idx_fac_sel = i_f
-                            break
-    
-                if "sel_factura_auditoria_box" in st.session_state:
-                    if st.session_state["sel_factura_auditoria_box"] not in opciones_fac and idx_fac_sel < len(opciones_fac):
-                        st.session_state["sel_factura_auditoria_box"] = opciones_fac[idx_fac_sel]
-    
-                seleccion = st.selectbox(
-                    "Selecciona una factura para auditar:",
-                    opciones_fac,
-                    index=idx_fac_sel if idx_fac_sel < len(opciones_fac) else 0,
-                    key="sel_factura_auditoria_box"
-                ) if opciones_fac else None
-    
+                if comp_activo_guardado and comp_activo_guardado in comps_en_vista:
+                    idx_fac_sel = comps_en_vista.index(comp_activo_guardado)
+
+                c_nav_sel, c_nav_prev, c_nav_next, c_nav_pend = st.columns([3.0, 0.65, 0.65, 0.9])
+                with c_nav_prev:
+                    st.write("")
+                    if st.button("\u2b05\ufe0f Anterior", key="btn_nav_prev_h2", use_container_width=True, disabled=(idx_fac_sel <= 0)):
+                        nuevo_i = max(0, idx_fac_sel - 1)
+                        st.session_state["factura_seleccionada_auditoria"] = comps_en_vista[nuevo_i]
+                        st.session_state["sel_factura_auditoria_box"] = opciones_fac[nuevo_i]
+                        st.rerun()
+                with c_nav_next:
+                    st.write("")
+                    if st.button("Siguiente \u27a1\ufe0f", key="btn_nav_next_h2", use_container_width=True, disabled=(idx_fac_sel >= len(opciones_fac) - 1)):
+                        nuevo_i = min(len(opciones_fac) - 1, idx_fac_sel + 1)
+                        st.session_state["factura_seleccionada_auditoria"] = comps_en_vista[nuevo_i]
+                        st.session_state["sel_factura_auditoria_box"] = opciones_fac[nuevo_i]
+                        st.rerun()
+                with c_nav_pend:
+                    st.write("")
+                    if st.button("\u23ed\ufe0f Sig. Pendiente", key="btn_nav_next_pend_h2", use_container_width=True, help="Salta directamente a la siguiente factura pendiente por auditar"):
+                        comps_pend = df_p[mask_pend_f]["Comprobante Siigo"].astype(str).str.strip().tolist()
+                        if comps_pend:
+                            sig_c = comps_pend[0]
+                            for cp_cand in comps_pend:
+                                if cp_cand > str(comp_activo_guardado or ""):
+                                    sig_c = cp_cand
+                                    break
+                            st.session_state["factura_seleccionada_auditoria"] = sig_c
+                            st.session_state.pop("sel_factura_auditoria_box", None)
+                            st.rerun()
+
+                with c_nav_sel:
+                    if "sel_factura_auditoria_box" in st.session_state:
+                        if st.session_state["sel_factura_auditoria_box"] not in opciones_fac and idx_fac_sel < len(opciones_fac):
+                            st.session_state["sel_factura_auditoria_box"] = opciones_fac[idx_fac_sel]
+                    seleccion = st.selectbox(
+                        "Selecciona una factura para auditar:",
+                        opciones_fac,
+                        index=idx_fac_sel if idx_fac_sel < len(opciones_fac) else 0,
+                        key="sel_factura_auditoria_box"
+                    ) if opciones_fac else None
+
                 if not seleccion and opciones_fac:
                     seleccion = opciones_fac[0]
-    
+
                 comp_sel = seleccion.split("]")[0].replace("[", "").strip()
                 st.session_state["factura_seleccionada_auditoria"] = comp_sel
                 m_fac_matches = df_p[df_p["Comprobante Siigo"].astype(str).str.strip() == comp_sel]
@@ -4715,7 +4865,7 @@ try:
                                  "TRANSP" in str(fac_sel.get("Descripcion", "")).upper() or
                                  "FLETE" in str(fac_sel.get("Descripcion", "")).upper() or
                                  str(fac_sel.get("Cta ReteFuente", "")).strip() == "23652505")
-                if es_transp_sel:
+                if es_transp_sel and not bool(fac_sel.get("Editada Manualmente", False)):
                     r_idx_sel = fac_sel.name
                     b_val_sel = float(fac_sel.get("Base", 0.0) or 0.0)
                     df_p.at[r_idx_sel, "Descripcion"] = "INLAND RATE TRANSPORTE TERRESTRE"
@@ -4816,10 +4966,37 @@ try:
                     </div>
                     """, unsafe_allow_html=True)
     
-                    with st.expander("\u2699\ufe0f Ajustar Concepto, R\u00e9gimen, Cuentas (CxP), Base Gravable e Impuestos Asumidos:", expanded=True if (fac_sel.get("Ya Registrada") or es_aduanero) else False):
-                        st.caption("Modifica aqu\u00ed el concepto de la factura (Transporte, Agenciamiento, Compras), los valores fiscales y el tratamiento contable:")
-                    
-                        # SELECTOR DE CONCEPTO / ACTIVIDAD ECONOMICA DE LA FACTURA
+                    with st.expander("\u2699\ufe0f Ajustar Valores, Cuentas Contables (PUC) y Retenciones Formuladas:", expanded=True):
+                        comp_box_id = str(fac_sel.get("Comprobante Siigo", "")).strip()
+                        es_importacion_factura = es_aduanero or es_transp_sel or "1465" in str(fac_sel.get("Cta Principal", "")) or "IMPORTACI" in str(fac_sel.get("Categor\u00eda", "")).upper()
+
+                        # Catalogos Oficiales de Cuentas con Tarifas para Formulacion Automatica
+                        CATALOGO_CTAS_RETEFUENTE = [
+                            ("23652505", 0.01,   "23652505 - Transporte de Carga / Fletes (1.0%)"),
+                            ("23654001", 0.025,  "23654001 - Compras Generales / Repuestos (2.5%)"),
+                            ("23654004", 0.035,  "23654004 - Compras / Alojamiento / Restaurante (3.5%)"),
+                            ("23652501", 0.035,  "23652501 - Servicios Hoteles / Hospedaje (3.5%)"),
+                            ("23652503", 0.04,   "23652503 - Servicios Generales / Agenciamiento (4.0%)"),
+                            ("23652502", 0.06,   "23652502 - Servicios No Declarantes (6.0%)"),
+                            ("23653502", 0.07,   "23653502 - Arrendamientos / Otros (7.0%)"),
+                            ("23652001", 0.10,   "23652001 - Honorarios / Comisiones (10.0%)"),
+                            ("23651501", 0.11,   "23651501 - Honorarios Persona Juridica / Asesoria (11.0%)"),
+                            ("23657001", 0.02,   "23657001 - Otras Retenciones (2.0%)"),
+                            ("23654006", 0.001,  "23654006 - Combustibles / Derivados (0.1%)"),
+                            ("OTRA_RF",  None,   "Otra Cuenta / Porcentaje Personalizado...")
+                        ]
+                        CATALOGO_CTAS_RETEICA = [
+                            ("23680513", 4.14,   "23680513 - Transporte Terrestre Carga (4.14 por mil)"),
+                            ("23680511", 6.90,   "23680511 - Actividades Industriales / Otros (6.90 por mil)"),
+                            ("23680509", 7.00,   "23680509 - Actividades Comerciales / Otros (7.00 por mil)"),
+                            ("23680507", 8.00,   "23680507 - Actividades Servicios / Otros (8.00 por mil)"),
+                            ("23680505", 9.66,   "23680505 - Servicios / Agenciamiento Aduanero (9.66 por mil)"),
+                            ("23680501", 11.04,  "23680501 - Compras / Comercio General (11.04 por mil)"),
+                            ("23680503", 13.80,  "23680503 - Actividades Financieras / Especiales (13.80 por mil)"),
+                            ("OTRA_RI",  None,   "Otra Cuenta / Tarifa por mil Personalizada...")
+                        ]
+
+                        # 1. CABECERA RAPIDA: CONCEPTO Y REGIMEN DEL PROVEEDOR
                         opciones_conceptos = [
                             "\U0001f69a Transporte Terrestre de Carga / Fletes (ReteFuente 1% [23652505] - ReteICA 4.14\u2030 [23680513])",
                             "\U0001f3e2 Agenciamiento Aduanero / Intermediaci\u00f3n (ReteFuente 4% [23652503] - ReteICA 9.66\u2030 [23680505])",
@@ -4838,23 +5015,15 @@ try:
                         elif any(k in str(fac_sel.get("Proveedor", "")).upper() for k in ["HOTEL", "ESTELAR", "GENOVA"]):
                             idx_concep_act = 3
 
-                        comp_box_id = str(fac_sel.get('Comprobante Siigo', '')).strip()
-                        sel_concep = st.selectbox(
-                            "Concepto / Tipo de Retenci\u00f3n y Servicio de la Factura:",
-                            opciones_conceptos,
-                            index=idx_concep_act,
-                            key=f"sel_concep_{comp_box_id}",
-                            help="Selecciona Transporte de Carga para aplicar autom\u00e1ticamente la ReteFuente del 1% y ReteICA del 4.14 por mil."
-                        )
-                        es_concep_transp = "Transporte" in sel_concep
-                        es_concep_aduana = "Agenciamiento" in sel_concep
-                        es_concep_compra = "Compra" in sel_concep
-                        es_concep_hotel = "Alojamiento" in sel_concep
-                        es_concep_honor = "Honorarios" in sel_concep
-                        es_concep_soft = "Software" in sel_concep
-
-                        c_mod1, c_mod2 = st.columns(2)
-                        with c_mod1:
+                        c_top_c1, c_top_c2 = st.columns([1.4, 1.0])
+                        with c_top_c1:
+                            sel_concep = st.selectbox(
+                                "Concepto / Actividad de la Factura (Pre-ajusta cuentas sugeridas):",
+                                opciones_conceptos,
+                                index=idx_concep_act,
+                                key=f"sel_concep_{comp_box_id}"
+                            )
+                        with c_top_c2:
                             opciones_reg_man = [
                                 "O-48 (Responsable de IVA / Com\u00fan - Retenci\u00f3n Ordinaria)",
                                 "O-15 (Autorretenedor de Renta - Sin ReteFuente)",
@@ -4870,173 +5039,242 @@ try:
                             elif "O-13" in reg_actual: idx_actual = 2
                             elif "O-47" in reg_actual: idx_actual = 4
                             elif "O-49" in reg_actual: idx_actual = 5
-
-                            nuevo_reg_sel = st.selectbox("Selecciona R\u00e9gimen Fiscal:", opciones_reg_man, index=idx_actual, key=f"sel_reg_{comp_box_id}")
+                            nuevo_reg_sel = st.selectbox("R\u00e9gimen Fiscal del Proveedor:", opciones_reg_man, index=idx_actual, key=f"sel_reg_{comp_box_id}")
                             cod_reg_sel = nuevo_reg_sel.split()[0]
 
-                            cta_p_sug_def = "14650501" if (es_aduanero or es_concep_transp) else "51350501"
-                            cta_p_def = str(fac_sel.get("Cta Principal") or cta_p_sug_def).strip()
-                            nueva_cta_p = st.text_input(
-                                "Cuenta Principal (Gasto / Costo / Inventario):",
-                                value=cta_p_def,
-                                key=f"inp_cta_p_{comp_box_id}",
-                                help="Cuenta contable donde se imputa la base de la factura (ej. 14650501 Tr\u00e1nsito / Fletes, 51350501 Servicios)."
-                            )
+                        es_concep_transp = "Transporte" in sel_concep
+                        es_concep_aduana = "Agenciamiento" in sel_concep
+                        es_concep_compra = "Compra" in sel_concep
+                        es_concep_hotel = "Alojamiento" in sel_concep
+                        es_concep_honor = "Honorarios" in sel_concep
+                        es_concep_soft = "Software" in sel_concep
 
-                            cta_cxp_def = str(fac_sel.get("Cuenta Pasivo Especifica") or fac_sel.get("Cta Contrapartida") or ("22050505" if es_aduanero else "22050501")).strip()
-                            nueva_cta_cxp = st.text_input(
-                                "Cuenta por Pagar (Pasivo / Contrapartida):",
-                                value=cta_cxp_def,
-                                key=f"inp_cxp_{comp_box_id}",
-                                help="Puedes cambiar aqu\u00ed la cuenta pasivo (ej. 22050505 Agencia Aduana, 23359501 Acreedores/DHL, 22050501 Proveedores)."
-                            )
+                        # Valores actuales de la factura
+                        base_cur_f = float(fac_sel["Base"]) if pd.notna(fac_sel["Base"]) else 0.0
+                        iva_tot_cur_f = float(fac_sel.get("IVA", 0.0) or 0.0)
+                        iva_5_cur_f = float(fac_sel.get("IVA 5%", 0.0) or 0.0)
+                        iva_19_cur_f = float(fac_sel.get("IVA 19%", 0.0) or 0.0)
+                        if iva_5_cur_f > 0 and iva_19_cur_f <= 0 and iva_tot_cur_f > iva_5_cur_f:
+                            iva_19_cur_f = round(iva_tot_cur_f - iva_5_cur_f, 2)
+                        elif iva_5_cur_f <= 0 and iva_19_cur_f <= 0:
+                            iva_19_cur_f = iva_tot_cur_f
+                        inc_cur_f = float(fac_sel.get("INC / Otros Impuestos", 0.0) or 0.0)
+                        raw_imp_f = fac_sel.get("IVA Importaci\u00f3n")
+                        try:
+                            val_iva_imp_actual = float(raw_imp_f) if (raw_imp_f is not None and pd.notna(raw_imp_f)) else 0.0
+                        except Exception:
+                            val_iva_imp_actual = 0.0
 
-                            es_importacion_factura = es_aduanero or es_concep_transp or "1465" in str(fac_sel.get("Cta Principal", "")) or "IMPORTACI" in str(fac_sel.get("Categor\u00eda", "")).upper()
-                            cta_iva_def = str(fac_sel.get("Cta IVA") or ("24081501" if es_importacion_factura else "24081001")).strip()
-                            nueva_cta_iva = st.text_input(
-                                "Cuenta IVA 19% (Servicios / Compras):",
-                                value=cta_iva_def,
-                                key=f"inp_iva_{comp_box_id}",
-                                help="Cuenta contable de IVA descontable 19% (ej. 24081501 Servicios o 24081001 Compras)."
-                            )
-                            cta_iva_5_def = str(fac_sel.get("Cta IVA 5%") or "24081003").strip()
-                            nueva_cta_iva_5 = st.text_input(
-                                "Cuenta IVA 5% (Compras 5%):",
-                                value=cta_iva_5_def,
-                                key=f"inp_iva5_{comp_box_id}",
-                                help="Cuenta contable de IVA descontable al 5% (por defecto 24081003)."
-                            )
+                        # =========================================================================
+                        # BLOQUE 1: LUGAR EXCLUSIVO PARA VALORES Y BASES ($)
+                        # =========================================================================
+                        st.markdown("""
+                        <div style="background:#f0f9ff; border:1px solid #bae6fd; border-left:5px solid #0284c7; border-radius:6px; padding:8px 12px; margin:10px 0 8px 0;">
+                            <b style="color:#0369a1; font-size:14px;">\U0001f4b5 1. Valores Fiscales y Bases de la Factura ($)</b>
+                            <span style="color:#0c4a6e; font-size:12.5px;"> \u2014 Pon aqui unicamente los montos en pesos (las retenciones se formulan solas abajo segun la base):</span>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-                        with c_mod2:
-                            c_v1, c_v2 = st.columns(2)
-                            base_cur_f = float(fac_sel["Base"]) if pd.notna(fac_sel["Base"]) else 0.0
-                            iva_tot_cur_f = float(fac_sel.get("IVA", 0.0) or 0.0)
-                            iva_5_cur_f = float(fac_sel.get("IVA 5%", 0.0) or 0.0)
-                            iva_19_cur_f = float(fac_sel.get("IVA 19%", 0.0) or 0.0)
-                            if iva_5_cur_f > 0 and iva_19_cur_f <= 0 and iva_tot_cur_f > iva_5_cur_f:
-                                iva_19_cur_f = round(iva_tot_cur_f - iva_5_cur_f, 2)
-                            elif iva_5_cur_f <= 0 and iva_19_cur_f <= 0:
-                                iva_19_cur_f = iva_tot_cur_f
-                            inc_cur_f = float(fac_sel.get("INC / Otros Impuestos", 0.0) or 0.0)
-
-                            # Recalcular retenciones segun el concepto seleccionado
-                            if "O-48" in cod_reg_sel:
-                                if es_concep_transp:
-                                    rf_sug = round(base_cur_f * 0.01, 2) if base_cur_f >= 188000 else 0.0
-                                    ri_sug = round(base_cur_f * 0.00414, 2) if base_cur_f >= 188000 else 0.0
-                                    cta_rf_sug_def = "23652505"
-                                    cta_ri_sug_def = "23680513"
-                                elif es_concep_aduana:
-                                    rf_sug = round(base_cur_f * 0.04, 2) if base_cur_f >= 210000 else 0.0
-                                    ri_sug = round(base_cur_f * 0.00966, 2)
-                                    cta_rf_sug_def = "23652503"
-                                    cta_ri_sug_def = "23680505"
-                                elif es_concep_compra:
-                                    rf_sug = round(base_cur_f * 0.025, 2) if base_cur_f >= 1047000 else 0.0
-                                    ri_sug = round(base_cur_f * 0.01104, 2) if base_cur_f >= 1414000 else 0.0
-                                    cta_rf_sug_def = "23654001"
-                                    cta_ri_sug_def = "23680501"
-                                elif es_concep_hotel:
-                                    rf_sug = round(base_cur_f * 0.035, 2) if base_cur_f >= 210000 else 0.0
-                                    ri_sug = round(base_cur_f * 0.00966, 2)
-                                    cta_rf_sug_def = "23652501"
-                                    cta_ri_sug_def = "23680505"
-                                elif es_concep_honor:
-                                    rf_sug = round(base_cur_f * 0.11, 2)
-                                    ri_sug = round(base_cur_f * 0.00966, 2)
-                                    cta_rf_sug_def = "23651501"
-                                    cta_ri_sug_def = "23680505"
-                                elif es_concep_soft:
-                                    rf_sug = 0.0
-                                    ri_sug = 0.0
-                                    cta_rf_sug_def = ""
-                                    cta_ri_sug_def = ""
-                                else:
-                                    rf_sug = round(base_cur_f * 0.04, 2) if base_cur_f >= 210000 else 0.0
-                                    ri_sug = round(base_cur_f * 0.00966, 2)
-                                    cta_rf_sug_def = "23652503"
-                                    cta_ri_sug_def = "23680505"
-                            elif any(k in cod_reg_sel for k in ["O-15", "O-47"]):
-                                rf_sug = 0.0
-                                ri_sug = 0.0
-                                cta_rf_sug_def = ""
-                                cta_ri_sug_def = ""
+                        cv_1, cv_2, cv_3 = st.columns(3)
+                        with cv_1:
+                            nueva_base = st.number_input("Base Gravable / Subtotal ($):", value=base_cur_f, step=1000.0, key=f"nb_{comp_box_id}")
+                            usar_base_ret_distinta = st.checkbox(
+                                "Usar base de retencion distinta al subtotal",
+                                value=False,
+                                key=f"chk_base_ret_esp_{comp_box_id}",
+                                help="Activalo si la retencion solo aplica sobre una parte de la factura (ej. solo sobre ingresos propios del agente)."
+                            )
+                            if usar_base_ret_distinta:
+                                base_para_retenciones = st.number_input("Base para Calcular Retenciones ($):", value= float(nueva_base), step=1000.0, key=f"nb_ret_esp_{comp_box_id}")
                             else:
-                                rf_sug = float(fac_sel.get("ReteFuente", 0.0))
-                                ri_sug = float(fac_sel.get("ReteICA", 0.0))
-                                cta_rf_sug_def = str(fac_sel.get("Cta ReteFuente") or "23652503")
-                                cta_ri_sug_def = str(fac_sel.get("Cta ReteICA") or "23680505")
-
-                            val_rf_prev = float(fac_sel.get("ReteFuente", 0.0))
-                            val_ri_prev = float(fac_sel.get("ReteICA", 0.0))
-                        
-                            # Si el concepto es transporte o el valor previo era 0/calculado como servicio, precargar sugerencia
-                            val_rf_input = rf_sug if (es_concep_transp or val_rf_prev == 0.0 or val_rf_prev == round(base_cur_f * 0.04, 2)) else val_rf_prev
-                            val_ri_input = ri_sug if (es_concep_transp or val_ri_prev == 0.0 or val_ri_prev == round(base_cur_f * 0.00966, 2)) else val_ri_prev
-                            with c_v1:
-                                nueva_base = st.number_input("Base Gravable / Subtotal ($):", value=base_cur_f, step=1000.0, key=f"nb_{fac_sel['Comprobante Siigo']}")
-                                nuevo_iva_5 = st.number_input("IVA Descontable 5% ($) [24081003]:", value=iva_5_cur_f, step=100.0, key=f"niva5_{fac_sel['Comprobante Siigo']}", help="Valor del IVA al 5% discriminado en la factura (se contabiliza en la cuenta 24081003).")
-                                nueva_rfte = st.number_input("ReteFuente ($):", value=val_rf_input, step=100.0, key=f"nrf_{fac_sel['Comprobante Siigo']}")
-                                cta_rf_sug_box = "23652505" if (es_concep_transp or (val_rf_input > 0 and abs(val_rf_input - round(base_cur_f * 0.01, 2)) < 2.0)) else str(fac_sel.get("Cta ReteFuente") or cta_rf_sug_def)
-                                nueva_cta_rf = st.text_input("Cuenta ReteFuente:", value=cta_rf_sug_box, key=f"inp_cta_rf_{fac_sel['Comprobante Siigo']}", help="Cuenta contable de ReteFuente (23652505 Transporte 1%, 23652503 Servicios 4%, 23654001 Compras 2.5%).")
-                            with c_v2:
-                                lbl_iva_desc = "IVA Servicios 19% ($) [24081501]:" if es_importacion_factura else "IVA Descontable 19% ($) [24081001]:"
-                                nuevo_iva_19 = st.number_input(lbl_iva_desc, value=iva_19_cur_f, step=100.0, key=f"niva_{fac_sel['Comprobante Siigo']}", help="Valor del IVA al 19% discriminado en la factura.")
-                                nuevo_inc_otros = st.number_input("INC 8% / Bolsas / Otros Imp ($):", value=inc_cur_f, step=100.0, key=f"ninc_{fac_sel['Comprobante Siigo']}", help="Impoconsumo (8% restaurante/hotel) o impuesto a las bolsas (mayor valor del gasto/costo).")
-                                nuevo_rica = st.number_input("ReteICA ($):", value=val_ri_input, step=100.0, key=f"nri_{fac_sel['Comprobante Siigo']}")
-                                cta_ri_sug_box = "23680513" if (es_concep_transp or (val_ri_input > 0 and abs(val_ri_input - round(base_cur_f * 0.00414, 2)) < 2.0)) else str(fac_sel.get("Cta ReteICA") or cta_ri_sug_def)
-                                nueva_cta_ri = st.text_input("Cuenta ReteICA:", value=cta_ri_sug_box, key=f"inp_cta_ri_{fac_sel['Comprobante Siigo']}", help="Cuenta contable de ReteICA (23680513 Transporte 4.14\u2030, 23680505 Servicios 9.66\u2030, 23680501 Compras 11.04\u2030).")
-    
-                            # CAMPO DEDICADO: IVA DE IMPORTACION (CUENTA 240835) - SOLO PARA FACTURAS DE IMPORTACION
-                            if es_importacion_factura:
-                                raw_imp_f = fac_sel.get("IVA Importaci\u00f3n")
-                                try:
-                                    val_iva_imp_actual = float(raw_imp_f) if (raw_imp_f is not None and pd.notna(raw_imp_f)) else 0.0
-                                    if pd.isna(val_iva_imp_actual):
-                                        val_iva_imp_actual = 0.0
-                                except Exception:
-                                    val_iva_imp_actual = 0.0
-    
-                                raw_cta_f = fac_sel.get("Cta IVA Importaci\u00f3n")
-                                if raw_cta_f is None or pd.isna(raw_cta_f) or str(raw_cta_f).strip() in ["", "nan", "None"]:
-                                    cta_iva_imp_actual = "240835"
-                                else:
-                                    cta_iva_imp_actual = str(raw_cta_f).strip()
-    
-                                c_imp1, c_imp2 = st.columns(2)
-                                with c_imp1:
-                                    nuevo_iva_imp = st.number_input(
-                                        "\U0001f6a2 IVA de Importaci\u00f3n ($) (Cta 240835):",
-                                        value=float(val_iva_imp_actual),
-                                        step=1000.0,
-                                        key=f"niva_imp_val_{fac_sel['Comprobante Siigo']}",
-                                        help="Ingresa aqu\u00ed el valor del IVA pagado en la importaci\u00f3n / declaraci\u00f3n de aduanas que se imputa a la cuenta 240835."
-                                    )
-                                with c_imp2:
-                                    cta_iva_imp_cod = st.text_input(
-                                        "Cuenta IVA Importaci\u00f3n:",
-                                        value=cta_iva_imp_actual,
-                                        key=f"inp_cta_ivaimp_cod_{fac_sel['Comprobante Siigo']}",
-                                        help="Cuenta contable de IVA para importaci\u00f3n (por defecto 240835)."
-                                    )
+                                base_para_retenciones = float(nueva_base)
+                        with cv_2:
+                            nuevo_iva_19 = st.number_input("IVA 19% ($):", value=iva_19_cur_f, step=100.0, key=f"niva_{comp_box_id}")
+                            nuevo_iva_5 = st.number_input("IVA 5% ($):", value=iva_5_cur_f, step=100.0, key=f"niva5_{comp_box_id}")
+                        with cv_3:
+                            nuevo_inc_otros = st.number_input("INC 8% / Bolsas / Otros ($):", value=inc_cur_f, step=100.0, key=f"ninc_{comp_box_id}")
+                            if es_importacion_factura or val_iva_imp_actual > 0:
+                                nuevo_iva_imp = st.number_input("\U0001f6a2 IVA de Importaci\u00f3n ($):", value=float(val_iva_imp_actual), step=1000.0, key=f"niva_imp_val_{comp_box_id}")
                             else:
                                 nuevo_iva_imp = 0.0
+
+                        # =========================================================================
+                        # BLOQUE 2: LUGAR EXCLUSIVO PARA CUENTAS CONTABLES (PUC)
+                        # =========================================================================
+                        st.markdown("""
+                        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-left:5px solid #334155; border-radius:6px; padding:8px 12px; margin:12px 0 8px 0;">
+                            <b style="color:#0f172a; font-size:14px;">\U0001f3e6 2. Cuentas Contables (PUC)</b>
+                            <span style="color:#475569; font-size:12.5px;"> \u2014 Modifica aqui cualquier cuenta contable en caso de que debas cambiarla:</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        cta_p_sug_def = "14650501" if (es_aduanero or es_concep_transp) else "51350501"
+                        cta_p_def = str(fac_sel.get("Cta Principal") or cta_p_sug_def).strip()
+                        cta_cxp_def = str(fac_sel.get("Cuenta Pasivo Especifica") or fac_sel.get("Cta Contrapartida") or ("22050505" if es_aduanero else "22050501")).strip()
+                        cta_iva_def = str(fac_sel.get("Cta IVA") or ("24081501" if es_importacion_factura else "24081001")).strip()
+                        cta_iva_5_def = str(fac_sel.get("Cta IVA 5%") or "24081003").strip()
+                        raw_cta_f = fac_sel.get("Cta IVA Importaci\u00f3n")
+                        cta_iva_imp_actual = "240835" if (raw_cta_f is None or pd.isna(raw_cta_f) or str(raw_cta_f).strip() in ["", "nan", "None"]) else str(raw_cta_f).strip()
+
+                        cc_1, cc_2, cc_3 = st.columns(3)
+                        with cc_1:
+                            nueva_cta_p = st.text_input("Cuenta Principal (Gasto / Costo / Inv):", value=cta_p_def, key=f"inp_cta_p_{comp_box_id}")
+                            nueva_cta_cxp = st.text_input("Cuenta por Pagar (Pasivo / CxP):", value=cta_cxp_def, key=f"inp_cxp_{comp_box_id}")
+                        with cc_2:
+                            nueva_cta_iva = st.text_input("Cuenta IVA 19%:", value=cta_iva_def, key=f"inp_iva_{comp_box_id}")
+                            nueva_cta_iva_5 = st.text_input("Cuenta IVA 5%:", value=cta_iva_5_def, key=f"inp_iva5_{comp_box_id}")
+                        with cc_3:
+                            if es_importacion_factura or val_iva_imp_actual > 0:
+                                cta_iva_imp_cod = st.text_input("Cuenta IVA Importaci\u00f3n:", value=cta_iva_imp_actual, key=f"inp_cta_ivaimp_cod_{comp_box_id}")
+                            else:
                                 cta_iva_imp_cod = "240835"
-    
+
+                        # =========================================================================
+                        # BLOQUE 3: RETENCIONES FORMULADAS AUTOMATICAMENTE POR CUENTA + DESHABILITAR
+                        # =========================================================================
+                        st.markdown("""
+                        <div style="background:#f0fdf4; border:1px solid #86efac; border-left:5px solid #16a34a; border-radius:6px; padding:8px 12px; margin:12px 0 8px 0;">
+                            <b style="color:#166534; font-size:14px;">\U0001f9ee 3. Retenciones Formuladas Automaticamente por Cuenta</b>
+                            <span style="color:#14532d; font-size:12.5px;"> \u2014 Si cambias la Base o eliges otra Cuenta de otro porcentaje, la formula se adecua al instante. Si no lleva retencion, deshabilita la casilla para que no entre a la contabilizacion:</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Determinar cuenta y estado inicial de ReteFuente y ReteICA
+                        val_rf_prev = float(fac_sel.get("ReteFuente", 0.0) or 0.0)
+                        val_ri_prev = float(fac_sel.get("ReteICA", 0.0) or 0.0)
+                        cta_rf_guardada = _limpiar_codigo_cta(fac_sel.get("Cta ReteFuente"), "")
+                        cta_ri_guardada = _limpiar_codigo_cta(fac_sel.get("Cta ReteICA"), "")
+
+                        if es_concep_transp:
+                            cta_rf_sug_def, cta_ri_sug_def = "23652505", "23680513"
+                        elif es_concep_aduana:
+                            cta_rf_sug_def, cta_ri_sug_def = "23652503", "23680505"
+                        elif es_concep_compra:
+                            cta_rf_sug_def, cta_ri_sug_def = "23654001", "23680501"
+                        elif es_concep_hotel:
+                            cta_rf_sug_def, cta_ri_sug_def = "23652501", "23680505"
+                        elif es_concep_honor:
+                            cta_rf_sug_def, cta_ri_sug_def = "23651501", "23680505"
+                        elif es_concep_soft:
+                            cta_rf_sug_def, cta_ri_sug_def = "", ""
+                        else:
+                            cta_rf_sug_def, cta_ri_sug_def = "23652503", "23680505"
+
+                        es_exento_ret_reg = any(k in cod_reg_sel for k in ["O-15", "O-47"]) or es_concep_soft
+                        tiene_rf_def = False if es_exento_ret_reg else (val_rf_prev > 0 or es_concep_transp)
+                        tiene_ri_def = False if (es_exento_ret_reg or "O-13" in cod_reg_sel) else (val_ri_prev > 0 or es_concep_transp)
+
+                        cta_rf_inicial = cta_rf_guardada if cta_rf_guardada else (cta_rf_sug_def or "23652503")
+                        cta_ri_inicial = cta_ri_guardada if cta_ri_guardada else (cta_ri_sug_def or "23680505")
+
+                        cr_rf, cr_ri = st.columns(2)
+
+                        # --- COLUMNA RETEFUENTE ---
+                        with cr_rf:
+                            aplicar_rfte = st.checkbox(
+                                "\u2705 Aplicar ReteFuente a esta factura",
+                                value=tiene_rf_def,
+                                key=f"chk_aplica_rf_{comp_box_id}_{cod_reg_sel}",
+                                help="Desmarca esta casilla si la factura NO tiene ReteFuente: quedara en $0.00 y no entrara en la contabilizacion."
+                            )
+                            if aplicar_rfte:
+                                cods_rf_cat = [x[0] for x in CATALOGO_CTAS_RETEFUENTE]
+                                idx_rf_cat = cods_rf_cat.index(cta_rf_inicial) if cta_rf_inicial in cods_rf_cat else 4
+                                sel_rf_item = st.selectbox(
+                                    "Cuenta ReteFuente (Formula automatica):",
+                                    options=CATALOGO_CTAS_RETEFUENTE,
+                                    index=idx_rf_cat,
+                                    format_func=lambda x: x[2],
+                                    key=f"sel_cta_rf_formula_{comp_box_id}"
+                                )
+                                if sel_rf_item[0] == "OTRA_RF":
+                                    c_orf1, c_orf2 = st.columns(2)
+                                    with c_orf1:
+                                        nueva_cta_rf = st.text_input("Codigo Cuenta ReteFuente:", value=cta_rf_inicial, key=f"inp_otra_rf_cta_{comp_box_id}")
+                                    with c_orf2:
+                                        pct_rf_custom = st.number_input("Porcentaje ReteFuente (%):", value=4.0, step=0.5, key=f"inp_otra_rf_pct_{comp_box_id}")
+                                    tasa_rf_usar = float(pct_rf_custom) / 100.0
+                                else:
+                                    nueva_cta_rf = sel_rf_item[0]
+                                    tasa_rf_usar = float(sel_rf_item[1])
+
+                                rfte_formulada = round(float(base_para_retenciones) * tasa_rf_usar, 2)
+                                st.info(f"\U0001f9ee **Formula Activa:** Base `${base_para_retenciones:,.2f}` \u00d7 `{tasa_rf_usar*100:.2f}%` ([{nueva_cta_rf}]) = **${rfte_formulada:,.2f}**")
+                                manual_rf_opt = st.checkbox("Ajustar valor de ReteFuente manualmente", value=False, key=f"chk_man_rf_{comp_box_id}")
+                                if manual_rf_opt:
+                                    nueva_rfte = st.number_input("Valor ReteFuente Manual ($):", value=float(val_rf_prev if val_rf_prev > 0 else rfte_formulada), step=100.0, key=f"nrf_man_{comp_box_id}")
+                                else:
+                                    nueva_rfte = rfte_formulada
+                            else:
+                                nueva_rfte = 0.0
+                                nueva_cta_rf = ""
+                                st.caption("\U0001f6ab *ReteFuente deshabilitada ($0.00) \u2014 No entrara al asiento contable ni a Siigo.*")
+
+                        # --- COLUMNA RETEICA ---
+                        with cr_ri:
+                            aplicar_rica = st.checkbox(
+                                "\u2705 Aplicar ReteICA a esta factura",
+                                value=tiene_ri_def,
+                                key=f"chk_aplica_ri_{comp_box_id}_{cod_reg_sel}",
+                                help="Desmarca esta casilla si la factura NO tiene ReteICA: quedara en $0.00 y no entrara en la contabilizacion."
+                            )
+                            if aplicar_rica:
+                                cods_ri_cat = [x[0] for x in CATALOGO_CTAS_RETEICA]
+                                idx_ri_cat = cods_ri_cat.index(cta_ri_inicial) if cta_ri_inicial in cods_ri_cat else 4
+                                sel_ri_item = st.selectbox(
+                                    "Cuenta ReteICA (Formula automatica por mil):",
+                                    options=CATALOGO_CTAS_RETEICA,
+                                    index=idx_ri_cat,
+                                    format_func=lambda x: x[2],
+                                    key=f"sel_cta_ri_formula_{comp_box_id}"
+                                )
+                                if sel_ri_item[0] == "OTRA_RI":
+                                    c_ori1, c_ori2 = st.columns(2)
+                                    with c_ori1:
+                                        nueva_cta_ri = st.text_input("Codigo Cuenta ReteICA:", value=cta_ri_inicial, key=f"inp_otra_ri_cta_{comp_box_id}")
+                                    with c_ori2:
+                                        mil_ri_custom = st.number_input("Tarifa por mil (\u2030):", value=9.66, step=0.1, key=f"inp_otra_ri_mil_{comp_box_id}")
+                                    tasa_ri_mil = float(mil_ri_custom)
+                                else:
+                                    nueva_cta_ri = sel_ri_item[0]
+                                    tasa_ri_mil = float(sel_ri_item[1])
+
+                                rica_formulada = round((float(base_para_retenciones) * tasa_ri_mil) / 1000.0, 2)
+                                st.info(f"\U0001f9ee **Formula Activa:** Base `${base_para_retenciones:,.2f}` \u00d7 `{tasa_ri_mil:.2f}\u2030` ([{nueva_cta_ri}]) = **${rica_formulada:,.2f}**")
+                                manual_ri_opt = st.checkbox("Ajustar valor de ReteICA manualmente", value=False, key=f"chk_man_ri_{comp_box_id}")
+                                if manual_ri_opt:
+                                    nuevo_rica = st.number_input("Valor ReteICA Manual ($):", value=float(val_ri_prev if val_ri_prev > 0 else rica_formulada), step=100.0, key=f"nri_man_{comp_box_id}")
+                                else:
+                                    nuevo_rica = rica_formulada
+                            else:
+                                nuevo_rica = 0.0
+                                nueva_cta_ri = ""
+                                st.caption("\U0001f6ab *ReteICA deshabilitado ($0.00) \u2014 No entrara al asiento contable ni a Siigo.*")
+
                         asumir_imp = st.checkbox(
-                            "Asumir Impuestos / Retenciones (Cruza con Agente Aduanero / Triangulaci\u00f3n)",
+                            "Asumir Impuestos / Retenciones (Cruza con Agente Aduanero / Triangulaci\u00f3n - Cta 53152001)",
                             value=bool(fac_sel.get("Impuestos Asumidos", False) or es_aduanero or any(k in fac_sel["Proveedor"].upper() for k in ["CARGO", "ADUANA", "PORTUARIA", "DHL"])),
-                            key=f"asum_in_{fac_sel['Comprobante Siigo']}",
-                            help="Si se asumen, las retenciones van a la cuenta 53152001 (Retenciones Asumidas) y el Saldo por Pagar de la factura queda en Base + IVA (ej. .651.939)."
+                            key=f"asum_in_{comp_box_id}",
+                            help="Si se asumen, las retenciones van a la cuenta 53152001 y el Saldo por Pagar de la factura queda en Base + IVA."
                         )
-    
-                        comp_key_btn = str(fac_sel.get('Comprobante Siigo', '')).strip()
-                        if st.button("\U0001f4be Aplicar Cambios y Recalcular Asiento", key=f"btn_aplica_reg_{comp_key_btn}"):
+
+                        def _guardar_cambios_factura_actual(avanzar_siguiente=False, aplicar_a_todo_proveedor=False):
                             cod_reg = _limpiar_codigo_cta(nuevo_reg_sel, "O-48")
                             m_idx_list = df_p[df_p["Comprobante Siigo"].astype(str).str.strip() == comp_sel].index
                             r_idx = m_idx_list[0] if len(m_idx_list) > 0 else fac_sel.name
                             nuevo_iva_tot = round(float(nuevo_iva_19 or 0.0) + float(nuevo_iva_5 or 0.0), 2)
                             nuevo_inc_f = round(float(nuevo_inc_otros or 0.0), 2)
+                            cta_rf_clean = _limpiar_codigo_cta(nueva_cta_rf, "") if aplicar_rfte else ""
+                            cta_ri_clean = _limpiar_codigo_cta(nueva_cta_ri, "") if aplicar_rica else ""
+                            rfte_guardar = round(float(nueva_rfte or 0.0), 2) if aplicar_rfte else 0.0
+                            rica_guardar = round(float(nuevo_rica or 0.0), 2) if aplicar_rica else 0.0
+                            cta_clean = _limpiar_codigo_cta(nueva_cta_cxp, "22050501")
+                            cta_p_clean = _limpiar_codigo_cta(nueva_cta_p, "51959501")
+                            cta_iva_clean = _limpiar_codigo_cta(nueva_cta_iva, "24081501" if es_importacion_factura else "24081001")
+                            cta_iva_5_clean = _limpiar_codigo_cta(nueva_cta_iva_5, "24081003")
+                            nuevo_iva_imp_f = float(nuevo_iva_imp) if pd.notna(nuevo_iva_imp) else 0.0
+                            cta_iva_imp_clean = _limpiar_codigo_cta(cta_iva_imp_cod, "240835")
+
                             df_p.at[r_idx, "R\u00e9gimen Fiscal Emisor"] = cod_reg
                             df_p.at[r_idx, "Base"] = nueva_base
                             df_p.at[r_idx, "IVA"] = nuevo_iva_tot
@@ -5045,52 +5283,67 @@ try:
                             df_p.at[r_idx, "Base IVA 19%"] = round(float(nuevo_iva_19) / 0.19, 2) if float(nuevo_iva_5 or 0.0) > 0 and float(nuevo_iva_19 or 0.0) > 0 else (nueva_base if float(nuevo_iva_19 or 0.0) > 0 else 0.0)
                             df_p.at[r_idx, "Base IVA 5%"] = round(float(nuevo_iva_5) / 0.05, 2) if float(nuevo_iva_5 or 0.0) > 0 else 0.0
                             df_p.at[r_idx, "INC / Otros Impuestos"] = nuevo_inc_f
-                            df_p.at[r_idx, "ReteFuente"] = nueva_rfte
-                            df_p.at[r_idx, "ReteICA"] = nuevo_rica
-                            cta_rf_clean = _limpiar_codigo_cta(nueva_cta_rf, "")
-                            cta_ri_clean = _limpiar_codigo_cta(nueva_cta_ri, "")
+                            df_p.at[r_idx, "ReteFuente"] = rfte_guardar
+                            df_p.at[r_idx, "ReteICA"] = rica_guardar
                             df_p.at[r_idx, "Cta ReteFuente"] = cta_rf_clean
                             df_p.at[r_idx, "Cta ReteICA"] = cta_ri_clean
 
                             if es_concep_transp or cta_rf_clean == "23652505":
                                 df_p.at[r_idx, "Categor\u00eda"] = "Transporte Carga (1%)"
                                 df_p.at[r_idx, "Raz\u00f3n Contable"] = "Transporte Terrestre de Carga / Fletes (1% ReteFuente [23652505] - 4.14\u2030 ReteICA [23680513])"
-                                if not str(df_p.at[r_idx, "Descripcion"]).strip() or "Importacion" in str(df_p.at[r_idx, "Descripcion"]):
-                                    df_p.at[r_idx, "Descripcion"] = "INLAND RATE TRANSPORTE TERRESTRE"
-                            cta_clean = _limpiar_codigo_cta(nueva_cta_cxp, "22050501")
-                            cta_p_clean = _limpiar_codigo_cta(nueva_cta_p, "51959501")
                             df_p.at[r_idx, "Cuenta Pasivo Especifica"] = cta_clean
                             df_p.at[r_idx, "Cta Contrapartida"] = cta_clean
                             df_p.at[r_idx, "Cta Principal"] = cta_p_clean
-                            cta_iva_clean = _limpiar_codigo_cta(nueva_cta_iva, "24081501" if es_importacion_factura else "24081001")
-                            cta_iva_5_clean = _limpiar_codigo_cta(nueva_cta_iva_5, "24081003")
                             df_p.at[r_idx, "Cta IVA"] = cta_iva_clean
                             df_p.at[r_idx, "Cta IVA 5%"] = cta_iva_5_clean
-                            nuevo_iva_imp_f = float(nuevo_iva_imp) if pd.notna(nuevo_iva_imp) else 0.0
-                            cta_iva_imp_clean = _limpiar_codigo_cta(cta_iva_imp_cod, "240835")
                             df_p.at[r_idx, "IVA Importaci\u00f3n"] = nuevo_iva_imp_f
                             df_p.at[r_idx, "Cta IVA Importaci\u00f3n"] = cta_iva_imp_clean
                             df_p.at[r_idx, "Impuestos Asumidos"] = asumir_imp
                             df_p.at[r_idx, "Editada Manualmente"] = True
-    
+
                             r_iva_val = float(fac_sel.get("ReteIVA", 0.0)) if pd.notna(fac_sel.get("ReteIVA")) else 0.0
                             if asumir_imp:
                                 saldo_p = round(nueva_base + nuevo_inc_f + nuevo_iva_tot + nuevo_iva_imp_f, 2)
-                                df_p.at[r_idx, "Neto a Pagar"] = saldo_p
-                                df_p.at[r_idx, "Total Neto"] = saldo_p
                             else:
-                                neto_p_calc = round(nueva_base + nuevo_inc_f + nuevo_iva_tot + nuevo_iva_imp_f - nueva_rfte - nuevo_rica - r_iva_val, 2)
-                                df_p.at[r_idx, "Neto a Pagar"] = neto_p_calc
-                                df_p.at[r_idx, "Total Neto"] = neto_p_calc
-    
+                                saldo_p = round(nueva_base + nuevo_inc_f + nuevo_iva_tot + nuevo_iva_imp_f - rfte_guardar - rica_guardar - r_iva_val, 2)
+                            df_p.at[r_idx, "Neto a Pagar"] = saldo_p
+                            df_p.at[r_idx, "Total Neto"] = saldo_p
+
                             tot_esperado = round(nueva_base + nuevo_inc_f + nuevo_iva_tot + nuevo_iva_imp_f, 2)
                             if nuevo_iva_imp_f > 0 and abs(float(df_p.at[r_idx, "Total"]) - tot_esperado) > 10.0:
                                 df_p.at[r_idx, "Total"] = tot_esperado
-    
+
+                            # Si se pidio replicar cuentas y formulas a TODAS las facturas del mismo proveedor
+                            n_replicadas = 0
+                            if aplicar_a_todo_proveedor:
+                                nit_prov_target = str(fac_sel.get("NIT Emisor", "")).strip()
+                                mask_mismo_prov = (df_p["NIT Emisor"].astype(str).str.strip() == nit_prov_target) & (df_p.index != r_idx) & (~df_p["No Contabilizar"].astype(bool))
+                                for idx_mp in df_p[mask_mismo_prov].index:
+                                    b_mp = float(df_p.at[idx_mp, "Base"] or 0.0)
+                                    iv_mp = float(df_p.at[idx_mp, "IVA"] or 0.0)
+                                    inc_mp = float(df_p.at[idx_mp, "INC / Otros Impuestos"] or 0.0)
+                                    imp_mp = float(df_p.at[idx_mp, "IVA Importaci\u00f3n"] or 0.0)
+                                    riv_mp = float(df_p.at[idx_mp, "ReteIVA"] or 0.0)
+                                    rf_mp = round(b_mp * tasa_rf_usar, 2) if aplicar_rfte else 0.0
+                                    ri_mp = round((b_mp * tasa_ri_mil) / 1000.0, 2) if aplicar_rica else 0.0
+                                    df_p.at[idx_mp, "R\u00e9gimen Fiscal Emisor"] = cod_reg
+                                    df_p.at[idx_mp, "Cta Principal"] = cta_p_clean
+                                    df_p.at[idx_mp, "Cuenta Pasivo Especifica"] = cta_clean
+                                    df_p.at[idx_mp, "Cta Contrapartida"] = cta_clean
+                                    df_p.at[idx_mp, "Cta IVA"] = cta_iva_clean
+                                    df_p.at[idx_mp, "Cta IVA 5%"] = cta_iva_5_clean
+                                    df_p.at[idx_mp, "ReteFuente"] = rf_mp
+                                    df_p.at[idx_mp, "Cta ReteFuente"] = cta_rf_clean
+                                    df_p.at[idx_mp, "ReteICA"] = ri_mp
+                                    df_p.at[idx_mp, "Cta ReteICA"] = cta_ri_clean
+                                    df_p.at[idx_mp, "Impuestos Asumidos"] = asumir_imp
+                                    df_p.at[idx_mp, "Editada Manualmente"] = True
+                                    neto_mp = round(b_mp + inc_mp + iv_mp + imp_mp, 2) if asumir_imp else round(b_mp + inc_mp + iv_mp + imp_mp - rf_mp - ri_mp - riv_mp, 2)
+                                    df_p.at[idx_mp, "Neto a Pagar"] = neto_mp
+                                    df_p.at[idx_mp, "Total Neto"] = neto_mp
+                                    n_replicadas += 1
+
                             st.session_state["df_procesado"] = df_p
-        # Asiento de triangulacion protegido: no se sobreescribe con asiento estandar
-    
-                            # Guardar regla en la Memoria de Aprendizaje Continuo
                             guardar_regla_aprendizaje(
                                 empresa,
                                 fac_sel.get("NIT Emisor"),
@@ -5101,23 +5354,34 @@ try:
                                 cta_iva=cta_iva_clean,
                                 asumir_impuestos=asumir_imp
                             )
-                            guardar_trabajo_en_historial(
-                                empresa, df_p,
-                                excel_bytes=None,
-                                excel_nombre=st.session_state.get("excel_nombre", "Reporte.xlsx"),
-                                dict_pdfs_renombrados=None,
-                                dict_pdfs_originales=None,
-                                zip_bytes=None,
-                                job_id=st.session_state.get("job_actual_id")
-                            )
                             st.session_state.pop("_cached_respaldo_bytes", None)
                             st.session_state.pop("_siigo_cache_sig", None)
                             guardar_estado_manual(empresa)
-                            st.session_state["factura_seleccionada_auditoria"] = comp_sel
+
+                            if avanzar_siguiente and idx_fac_sel < len(comps_en_vista) - 1:
+                                st.session_state["factura_seleccionada_auditoria"] = comps_en_vista[idx_fac_sel + 1]
+                            else:
+                                st.session_state["factura_seleccionada_auditoria"] = comp_sel
                             st.session_state.pop("sel_factura_auditoria_box", None)
-                            st.success(f"\u00a1Valores y Cuenta CxP ({cta_clean}) actualizados y asiento recalculado con \u00e9xito!")
-                            st.rerun()
-    
+                            return n_replicadas
+
+                        # BOTONES DE ACCION RAPIDA PARA QUE RINDA LA REVISION
+                        cb_act1, cb_act2, cb_act3 = st.columns([1.3, 1.5, 1.5])
+                        with cb_act1:
+                            if st.button("\U0001f4be Guardar y Recalcular", key=f"btn_aplica_reg_{comp_box_id}", type="primary", use_container_width=True):
+                                _guardar_cambios_factura_actual(avanzar_siguiente=False, aplicar_a_todo_proveedor=False)
+                                st.success("\u00a1Factura actualizada y asiento recalculado!")
+                                st.rerun()
+                        with cb_act2:
+                            if st.button("\U0001f4be\u27a1\ufe0f Guardar y Pasar a Siguiente", key=f"btn_aplica_next_{comp_box_id}", use_container_width=True, help="Guarda esta factura y abre de inmediato la siguiente para que avances sin subir al buscador"):
+                                _guardar_cambios_factura_actual(avanzar_siguiente=True, aplicar_a_todo_proveedor=False)
+                                st.rerun()
+                        with cb_act3:
+                            if st.button("\U0001f504 Aplicar Cuentas a todo este Proveedor", key=f"btn_aplica_prov_{comp_box_id}", use_container_width=True, help="Aplica estas mismas cuentas y porcentajes de retencion a todas las facturas activas de este mismo proveedor"):
+                                n_rep = _guardar_cambios_factura_actual(avanzar_siguiente=False, aplicar_a_todo_proveedor=True)
+                                st.success(f"\u00a1Cuentas y formulas aplicadas a esta factura y a otras {n_rep} facturas de {fac_sel.get('Proveedor', '')}!")
+                                st.rerun()
+
                     if es_aduanero:
                         st.markdown("<br>", unsafe_allow_html=True)
                         st.markdown("""
