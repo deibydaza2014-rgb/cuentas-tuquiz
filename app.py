@@ -4417,6 +4417,9 @@ try:
         val_iva19 = float(fac_sel.get("IVA 19%", 0.0) or 0.0)
         val_iva5 = float(fac_sel.get("IVA 5%", 0.0) or 0.0)
         val_inc = float(fac_sel.get("INC / Otros Impuestos", 0.0) or 0.0)
+        val_ivaimp_d = float(fac_sel.get("IVA Importaci\u00f3n", 0.0) or 0.0)
+        cta_ivaimp_d = str(fac_sel.get("Cta IVA Importaci\u00f3n") or "240835").strip()
+        linea_ivaimp_html = f"<b>\U0001f6a2 IVA de Importaci\u00f3n (Cta {cta_ivaimp_d}):</b> ${val_ivaimp_d:,.2f}<br>" if val_ivaimp_d > 0 else ""
         val_tot = float(fac_sel.get("Total", 0.0) or 0.0)
         val_rf = float(fac_sel.get("ReteFuente", 0.0) or 0.0)
         val_ri = float(fac_sel.get("ReteICA", 0.0) or 0.0)
