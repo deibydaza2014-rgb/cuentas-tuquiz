@@ -198,34 +198,8 @@ try:
     import time as _time_gc
     import ctypes as _ctypes_gc
 
-    def _forzar_liberacion_ram_so(comp_activo_actual=None):
-        """Limpia llaves de widgets de facturas anteriores, purga MediaFileManager y ejecuta malloc_trim(0)."""
-        try:
-            if comp_activo_actual:
-                _prefijos_fac = (
-                    "sel_reg_man_", "sel_conc_rf_", "sel_cta_p_man_", "txt_otra_cta_p_",
-                    "num_base_man_", "num_inc_man_", "num_iva_man_", "num_ivaimp_man_",
-                    "sel_cta_rf_man_", "txt_otra_rf_", "num_rf_man_", "sel_cta_ri_man_",
-                    "txt_otra_ri_", "num_ri_man_", "sel_cta_iva_man_", "txt_otra_iva_",
-                    "sel_cta_cxp_man_", "txt_otra_cxp_", "chk_asumir_imp_", "btn_aplica_reg_",
-                    "btn_aplica_next_", "btn_aplica_prov_", "chk_no_contab_ind_",
-                    "chk_lazy_pdf_dian_", "chk_solo_pdfs_exp_", "upl_pdfs_exp_", "exp_pdf_"
-                )
-                _suf_ok = str(comp_activo_actual).strip()
-                _suf_ok_clean = re.sub(r"\W", "_", _suf_ok)
-                for _k_ss in list(st.session_state.keys()):
-                    if _k_ss.startswith(_prefijos_fac) and (_suf_ok not in _k_ss) and (_suf_ok_clean not in _k_ss):
-                        st.session_state.pop(_k_ss, None)
-            # Limpiar buffers acumulados en MediaFileManager de Streamlit si existen
-            for _mod_name, _mod_obj in list(sys.modules.items()):
-                if "media_file_manager" in _mod_name and hasattr(_mod_obj, "media_file_manager"):
-                    _mfm = getattr(_mod_obj, "media_file_manager", None)
-                    _storage = getattr(_mfm, "_storage", None)
-                    if _storage is not None and hasattr(_storage, "_files_by_id"):
-                        if len(_storage._files_by_id) > 12:
-                            _storage._files_by_id.clear()
-        except Exception:
-            pass
+    def _forzar_liberacion_ram_so():
+        """Ejecuta gc.collect() y malloc_trim(0) en Linux para devolver paginas de RAM al kernel inmediatamente."""
         try:
             import gc as _gc_inner
             _gc_inner.collect()
@@ -4903,7 +4877,7 @@ try:
             for _s_p in _sids_purgar:
                 _store_gc.ACTIVE_SESSIONS.pop(_s_p, None)
             if _sids_purgar:
-                _forzar_liberacion_ram_so(st.session_state.get("factura_seleccionada_auditoria"))
+                _forzar_liberacion_ram_so()
     except Exception:
         pass
 
@@ -5481,14 +5455,14 @@ try:
         )
         st.markdown(html_doc, unsafe_allow_html=True)
 
-        # EXPANDER CON EL DOCUMENTO PDF DE LA FACTURA PARA CONSULTAR INFORMACION PENDIENTE (0 MB RAM / SIN FUGAS C++)
+        # EXPANDER CON EL DOCUMENTO PDF DE LA FACTURA PARA CONSULTAR INFORMACION PENDIENTE
         with st.expander(f"\U0001f4c4 Ver PDF de la Factura ({fac_num} \u2014 {pags_badge}) para Consultar Informaci\u00f3n Pendiente", expanded=False):
             safe_k_exp = re.sub(r"\W", "_", f"{comp_s}_{fac_num}_{key_suffix}")
             nombre_dl_pdf = str(fac_sel.get("Soporte PDF Renombrado") or f"Factura_{fac_num}.pdf")
             if not nombre_dl_pdf.lower().endswith(".pdf"):
                 nombre_dl_pdf += ".pdf"
 
-            # Ficha rapida de datos adicionales del PDF para consulta inmediata
+            # Ficha rapida de datos adicionales del PDF para consulta inmediata (0 MB RAM)
             st.markdown(
                 f"<div style='background:#eff6ff; border:1px solid #93c5fd; border-left:4px solid #0284c7; border-radius:6px; padding:10px 14px; margin-bottom:12px; font-size:12.8px; color:#1e3a8a;'>"
                 f"<b>\U0001f4cc Datos Adicionales de Consulta en el PDF ({fac_num}):</b><br>"
@@ -5501,44 +5475,83 @@ try:
                 unsafe_allow_html=True
             )
 
-            # Boton bajo demanda para descargar el archivo .pdf o ver imagen escaneada si se subio un PDF externo
-            c_pdf_opt1, c_pdf_opt2 = st.columns([1.8, 2.2])
-            with c_pdf_opt1:
-                if st.checkbox(f"\U0001f4e5 Habilitar descarga de archivo PDF ({fac_num})", value=False, key=f"chk_lazy_pdf_dian_{key_suffix}"):
-                    _pdf_b_dl = pdf_bytes_original or generar_pdf_factura_dian_bytes(fac_sel, paginas_txt or [], empresa_dict)
-                    st.download_button(
-                        label=f"\u2b07\ufe0f Guardar {nombre_dl_pdf}",
-                        data=_pdf_b_dl,
-                        file_name=nombre_dl_pdf,
-                        mime="application/pdf",
-                        key=f"btn_dl_pdf_unico_{key_suffix}",
-                        use_container_width=True
+            pdf_bytes_doc = pdf_bytes_original
+            es_pdf_sintetizado = False
+            if not key_suffix.startswith("pq_") or st.checkbox(f"\U0001f50d Mostrar PDF DIAN ({fac_num})", value=False, key=f"chk_lazy_pdf_dian_{safe_k_exp}"):
+                if not pdf_bytes_doc:
+                    try:
+                        _d_ren_lazy = st.session_state.get("dict_pdfs") or DiskBackedPDFDict("renom_pdfs")
+                        _d_ori_lazy = st.session_state.get("raw_uploaded_pdfs") or DiskBackedPDFDict("raw_pdfs")
+                        pdf_bytes_doc, _, _ = buscar_y_extraer_pdf(fac_sel, dict_renombrados=_d_ren_lazy, dict_originales=_d_ori_lazy, empresa_compradora=empresa_dict)
+                    except Exception:
+                        pdf_bytes_doc = None
+                if not pdf_bytes_doc:
+                    try:
+                        pdf_bytes_doc = generar_pdf_factura_dian_bytes(fac_sel, paginas_txt or [], empresa_dict)
+                        es_pdf_sintetizado = True
+                    except Exception:
+                        pdf_bytes_doc = b""
+                if pdf_bytes_doc:
+                    renderizar_visor_pdf_completo(
+                        pdf_bytes_doc,
+                        nombre_archivo=nombre_dl_pdf,
+                        fac_sel=fac_sel,
+                        key_prefix=f"exp_pdf_{safe_k_exp}",
+                        nit_comprador=re.sub(r"\D", "", str(empresa_dict.get("nit", "9013464125"))),
+                        mostrar_card_dian=False
                     )
 
-            # Hojas visuales A4 completas en formato Oficial DIAN Verde/Blanco (100% HTML vectorial, 0 MB de RAM C++)
-            if pags_est:
+            # Hojas visuales A4 completas solo como respaldo si no existiera el PDF oficial DIAN
+            if es_pdf_sintetizado and pags_est:
+                st.markdown("#### \U0001f4d1 Vista Detallada Hoja por Hoja del Documento PDF (Todos los Campos y Notas)")
                 for idx_pg, lines_pg in enumerate(pags_est):
                     filas_pg_html = ""
                     for ln_s in lines_pg:
                         if ":" in ln_s and not ln_s.startswith("http"):
                             p_k, p_v = ln_s.split(":", 1)
-                            filas_pg_html += f"<div style='padding:3px 0; border-bottom:1px dashed #e2e8f0;'><b style='color:#001028;'>{p_k}:</b> <span style='color:#1e293b;'>{p_v}</span></div>"
+                            filas_pg_html += f"<div style='padding:3px 0; border-bottom:1px dashed #e2e8f0;'><b style='color:#0f172a;'>{p_k}:</b> <span style='color:#1e293b;'>{p_v}</span></div>"
                         elif any(h_w in ln_s for h_w in ["FACTURA ELECTR", "Datos del ", "Detalles de Productos", "Notas Finales", "Datos Totales", "Valores informativos"]):
-                            filas_pg_html += f"<div style='background:#99ffcc; color:#001028; font-weight:700; padding:5px 10px; border-top:3px solid #41d78c; margin-top:10px; margin-bottom:4px;'>{ln_s}</div>"
+                            filas_pg_html += f"<div style='background:#e0f2fe; color:#0369a1; font-weight:700; padding:5px 8px; border-radius:4px; margin-top:8px; margin-bottom:4px;'>{ln_s}</div>"
                         else:
                             filas_pg_html += f"<div style='padding:2px 0; color:#334155;'>{ln_s}</div>"
 
                     st.markdown(
                         f"<div style='background:#525659; padding:14px; border-radius:8px; margin-bottom:14px;'>"
                         f"<div style='background:#ffffff; max-width:820px; margin:0 auto; padding:22px 28px; border-radius:4px; box-shadow:0 4px 14px rgba(0,0,0,0.25); font-family:-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; font-size:12.5px; line-height:1.45;'>"
-                        f"<div style='border-top:5px solid #41d78c; border-bottom:2px solid #41d78c; background:#f8fafc; padding:10px 14px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;'>"
-                        f"<div><b style='color:#001028; font-size:15px;'>DIAN &mdash; Factura Electr\u00f3nica de Venta {fac_num}</b><br><span style='font-size:11.5px; color:#475569;'>Emisor: {prov_nom} (NIT: {nit_em})</span></div>"
-                        f"<span style='background:#001028; color:#41d78c; padding:3px 12px; border-radius:12px; font-size:11.5px; font-weight:700;'>P\u00e1gina {idx_pg + 1} de {len(pags_est)}</span>"
+                        f"<div style='border-bottom:2px solid #0070ba; padding-bottom:8px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;'>"
+                        f"<span style='font-weight:800; color:#0070ba; font-size:14px;'>\U0001f4c4 DOCUMENTO PDF FACTURA {fac_num} \u2014 {prov_nom}</span>"
+                        f"<span style='background:#0070ba; color:white; padding:2px 10px; border-radius:12px; font-size:11.5px; font-weight:700;'>Hoja {idx_pg + 1} de {len(pags_est)}</span>"
                         f"</div>"
                         f"{filas_pg_html}"
                         f"</div></div>",
                         unsafe_allow_html=True
                     )
+
+            if es_pdf_sintetizado and not key_suffix.startswith("pq_"):
+                st.markdown("---")
+                c_up_e1, c_up_e2 = st.columns([2.2, 1.8])
+                with c_up_e2:
+                    solo_pdfs_exp = st.checkbox(
+                        "\U0001f512 Conservar mis cambios contables actuales",
+                        value=True,
+                        key=f"chk_solo_pdfs_exp_{safe_k_exp}"
+                    )
+                with c_up_e1:
+                    upl_exp = st.file_uploader(
+                        "\U0001f4e4 Opcional: Subir respaldo (.indumaq / .zip) si deseas cargar los 224 PDFs escaneados:",
+                        type=["indumaq", "zip", "pdf"],
+                        key=f"upl_pdfs_exp_{safe_k_exp}_{st.session_state.get('_upl_reset_cnt', 0)}"
+                    )
+                    if upl_exp is not None:
+                        with st.spinner("Extrayendo los 224 PDFs al disco local (0 MB RAM)..."):
+                            dict_r_tmp = st.session_state.get("dict_pdfs") or DiskBackedPDFDict("renom_pdfs")
+                            if upl_exp.name.lower().endswith(".pdf"):
+                                dict_r_tmp[upl_exp.name] = upl_exp.getvalue()
+                                st.session_state["dict_pdfs"] = dict_r_tmp
+                                st.rerun()
+                            elif restaurar_desde_respaldo_bytes(empresa_dict, upl_exp, solo_pdfs=solo_pdfs_exp):
+                                st.success("\u2705 \u00a1224 PDFs originales vinculados con \u00e9xito!")
+                                st.rerun()
 
 
     def cargar_respaldo_integrado_50_paquetes(empresa_dict=None):
@@ -5881,23 +5894,14 @@ try:
     
     # [Panel superior integrado en el escudo global]
 
-    _OPCIONES_PESTANAS_MAIN = [
+    tab_compras, tab_auditoria, tab_triangulacion, tab_siigo = st.tabs([
         "1. Cargar Documentos y Desbloquear PDFs",
         "2. Auditoria y Trazabilidad Fiscal",
         "3. \U0001f500 Triangulaci\u00f3n y Cruces de Importaci\u00f3n (Aduanas)",
         "4. Exportar Planilla Oficial a Siigo"
-    ]
-    _pestana_activa_main = st.radio(
-        "Navegacion Principal de Modulos:",
-        _OPCIONES_PESTANAS_MAIN,
-        index=1,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="rad_navegacion_pestana_principal"
-    )
-    st.markdown("<hr style='margin: 4px 0 16px 0; border: none; border-top: 2px solid #e2e8f0;'>", unsafe_allow_html=True)
+    ])
 
-    if _pestana_activa_main in (_OPCIONES_PESTANAS_MAIN[0], "__ALL_TABS_TEST__"):
+    with tab_compras:
         try:
             st.markdown("### 1. Insumos DIAN y Facturas en PDF")
             st.write("Sube el archivo Excel de la DIAN (`prueba.xlsx`) o el reporte de facturas, y los PDFs (unificados o separados) para desbloquear, guardar y renombrar autom\u00e1ticamente por comprobante.")
@@ -6641,7 +6645,7 @@ try:
             st.error(f"\u26a0\ufe0f Ocurri\u00f3 un error en la pesta\u00f1a de Compras DIAN: {_e_comp}")
             with st.expander("\U0001f50d Ver detalles t\u00e9cnicos del error (Traceback):"):
                 st.code(traceback.format_exc())
-    if _pestana_activa_main in (_OPCIONES_PESTANAS_MAIN[1], "__ALL_TABS_TEST__"):
+    with tab_auditoria:
         try:
             st.markdown("### Modulo de Auditoria Contable y Trazabilidad")
             st.caption("Inspecci\u00f3n de cuentas, deducciones y separaci\u00f3n de gastos por cuenta de terceros.")
@@ -7654,7 +7658,7 @@ try:
             st.error(f"\u26a0\ufe0f Ocurri\u00f3 un error en la pesta\u00f1a de Auditor\u00eda Contable: {_e_aud}")
             with st.expander("\U0001f50d Ver detalles t\u00e9cnicos del error (Traceback):"):
                 st.code(traceback.format_exc())
-    if _pestana_activa_main in (_OPCIONES_PESTANAS_MAIN[2], "__ALL_TABS_TEST__"):
+    with tab_triangulacion:
         try:
             st.markdown("### \U0001f500 Paquetes de Importaci\u00f3n y Cruce de Cuentas por Pagar")
             st.caption("Separa y concilia cada importaci\u00f3n en paquetes individuales: Cobro de Euro Shipping = Factura DHL (Flete) + Factura Agencia Aduanas + Factura Garaje/Almacenadora.")
@@ -9020,7 +9024,7 @@ try:
                                 "Cuenta Contable": str(tr_lib.get("Cuenta Pasivo Especifica", "22050505"))
                             })
     
-                        if todos_asientos_lista and st.checkbox("\U0001f4e5 Preparar Descarga de Control de Cruces de Importaci\u00f3n en Excel (50 Paquetes)", value=False, key="chk_prep_excel_cruces_tab3"):
+                        if todos_asientos_lista:
                             df_export_cruces = pd.DataFrame(todos_asientos_lista)
                             buf_cruce_ex = io.BytesIO()
                             with pd.ExcelWriter(buf_cruce_ex, engine="openpyxl") as wr_cr:
@@ -9049,7 +9053,7 @@ try:
             st.error(f"\u26a0\ufe0f Ocurri\u00f3 un error en la pesta\u00f1a de Triangulaci\u00f3n y Aduanas: {_e_tri}")
             with st.expander("\U0001f50d Ver detalles t\u00e9cnicos del error (Traceback):"):
                 st.code(traceback.format_exc())
-    if _pestana_activa_main in (_OPCIONES_PESTANAS_MAIN[3], "__ALL_TABS_TEST__"):
+    with tab_siigo:
         try:
             st.markdown("### \U0001f4e5 Planilla Oficial Siigo Nube (3 Hojas Formuladas)")
             st.caption("Se alimenta directamente con toda la informaci\u00f3n, cuentas, retenciones, impuestos asumidos y asientos aprobados que quedaron en la **Pesta\u00f1a 2 (Auditor\u00eda y Trazabilidad Fiscal)**.")
