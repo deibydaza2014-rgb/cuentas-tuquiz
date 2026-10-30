@@ -178,6 +178,7 @@ try:
     PDF_DISK_CACHE_ROOT = os.path.join(DATA_DIR, "indumaq_pdf_disk_cache")
     os.makedirs(PDF_DISK_CACHE_ROOT, exist_ok=True)
     ZIP_FACTURAS_DISK_PATH = os.path.join(PDF_DISK_CACHE_ROOT, "paquete_facturas_actual.zip")
+    _MEM_TEXT_CACHE = {}
 
 
     class DiskBackedPDFDict(dict):
@@ -371,50 +372,6 @@ try:
             "responsabilidades_rut": ["O-48"],
             "estado": "ACTIVA",
             "badge": "badge-active"
-        },
-        {
-            "nombre": "ASMINCOL S.A.S.",
-            "nit": "900.467.519-1",
-            "actividad": "Servicios Mineros y Construccion",
-            "regimen": "Responsable de IVA",
-            "es_gran_contribuyente": False,
-            "es_autorretenedor": False,
-            "responsabilidades_rut": ["O-48"],
-            "estado": "PROXIMAMENTE",
-            "badge": "badge-next"
-        },
-        {
-            "nombre": "CONSTRUDISENO CT SAS",
-            "nit": "900.524.356-8",
-            "actividad": "Construccion y Obras Civiles",
-            "regimen": "Responsable de IVA",
-            "es_gran_contribuyente": False,
-            "es_autorretenedor": False,
-            "responsabilidades_rut": ["O-48"],
-            "estado": "PROXIMAMENTE",
-            "badge": "badge-next"
-        },
-        {
-            "nombre": "SCG TRANSPORTES",
-            "nit": "901.700.731-8",
-            "actividad": "Transporte de Carga y Logistica",
-            "regimen": "Responsable de IVA",
-            "es_gran_contribuyente": False,
-            "es_autorretenedor": False,
-            "responsabilidades_rut": ["O-48"],
-            "estado": "PROXIMAMENTE",
-            "badge": "badge-next"
-        },
-        {
-            "nombre": "OPJ SAS",
-            "nit": "901.425.101-3",
-            "actividad": "Servicios Generales y Operaciones",
-            "regimen": "Responsable de IVA",
-            "es_gran_contribuyente": False,
-            "es_autorretenedor": False,
-            "responsabilidades_rut": ["O-48"],
-            "estado": "PROXIMAMENTE",
-            "badge": "badge-next"
         }
     ]
 
@@ -464,7 +421,10 @@ try:
         for k in list(st.session_state.keys()):
             if k in keys_limpiar or k.startswith(("paquete_listo_", "paquete_destino_siigo_", "enviar_gp_", "enviar_h2_", "enviar_nd_", "asiento_fijo_pq_")):
                 st.session_state.pop(k, None)
-        _MEM_TEXT_CACHE.clear()
+        try:
+            _MEM_TEXT_CACHE.clear()
+        except Exception:
+            pass
         gc.collect()
 
     EMPRESAS_DISPONIBLES = cargar_empresas_registradas()
@@ -491,7 +451,7 @@ try:
                     if st.button(f"Ingresar a {emp['nombre']}", key=f"btn_emp_{i}", use_container_width=True):
                         liberar_memoria_cambio_empresa()
                         st.session_state["empresa_activa"] = emp
-                        st.session_state["proceso_activo"] = None
+                        st.session_state["proceso_activo"] = "facturacion"
                         st.rerun()
                 else:
                     st.button(f"Pendiente Datos / Parametrizacion ({emp.get('estado', '')})", key=f"btn_emp_{i}", disabled=True)
