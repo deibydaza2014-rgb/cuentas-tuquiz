@@ -198,8 +198,34 @@ try:
     import time as _time_gc
     import ctypes as _ctypes_gc
 
-    def _forzar_liberacion_ram_so():
-        """Ejecuta gc.collect() y malloc_trim(0) en Linux para devolver paginas de RAM al kernel inmediatamente."""
+    def _forzar_liberacion_ram_so(comp_activo_actual=None):
+        """Limpia llaves de widgets de facturas anteriores, purga MediaFileManager y ejecuta malloc_trim(0)."""
+        try:
+            if comp_activo_actual:
+                _prefijos_fac = (
+                    "sel_reg_man_", "sel_conc_rf_", "sel_cta_p_man_", "txt_otra_cta_p_",
+                    "num_base_man_", "num_inc_man_", "num_iva_man_", "num_ivaimp_man_",
+                    "sel_cta_rf_man_", "txt_otra_rf_", "num_rf_man_", "sel_cta_ri_man_",
+                    "txt_otra_ri_", "num_ri_man_", "sel_cta_iva_man_", "txt_otra_iva_",
+                    "sel_cta_cxp_man_", "txt_otra_cxp_", "chk_asumir_imp_", "btn_aplica_reg_",
+                    "btn_aplica_next_", "btn_aplica_prov_", "chk_no_contab_ind_",
+                    "chk_lazy_pdf_dian_", "chk_solo_pdfs_exp_", "upl_pdfs_exp_", "exp_pdf_"
+                )
+                _suf_ok = str(comp_activo_actual).strip()
+                _suf_ok_clean = re.sub(r"\W", "_", _suf_ok)
+                for _k_ss in list(st.session_state.keys()):
+                    if _k_ss.startswith(_prefijos_fac) and (_suf_ok not in _k_ss) and (_suf_ok_clean not in _k_ss):
+                        st.session_state.pop(_k_ss, None)
+            # Limpiar buffers acumulados en MediaFileManager de Streamlit si existen
+            for _mod_name, _mod_obj in list(sys.modules.items()):
+                if "media_file_manager" in _mod_name and hasattr(_mod_obj, "media_file_manager"):
+                    _mfm = getattr(_mod_obj, "media_file_manager", None)
+                    _storage = getattr(_mfm, "_storage", None)
+                    if _storage is not None and hasattr(_storage, "_files_by_id"):
+                        if len(_storage._files_by_id) > 12:
+                            _storage._files_by_id.clear()
+        except Exception:
+            pass
         try:
             import gc as _gc_inner
             _gc_inner.collect()
@@ -3746,7 +3772,7 @@ try:
             "IVA Importaci\u00f3n": 0.0
         }
         defaults_bool = {
-            "Impuestos Asumidos": False, "No Contabilizar": False, "Ya Registrada": False, "Es Aduanera": False, "Editada Manualmente": False
+            "Impuestos Asumidos": False, "No Contabilizar": False, "Ya Registrada": False, "Es Aduanera": False, "Editada Manualmente": False, "Aprobada Hoja 2": False
         }
 
         for col, def_val in defaults_str.items():
@@ -3762,6 +3788,8 @@ try:
                 df[col] = def_val
             else:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(def_val)
+            if col == "Consecutivo":
+                df[col] = df[col].astype(int)
 
         for col, def_val in defaults_bool.items():
             if col not in df.columns:
@@ -4877,7 +4905,7 @@ try:
             for _s_p in _sids_purgar:
                 _store_gc.ACTIVE_SESSIONS.pop(_s_p, None)
             if _sids_purgar:
-                _forzar_liberacion_ram_so()
+                _forzar_liberacion_ram_so(st.session_state.get("factura_seleccionada_auditoria"))
     except Exception:
         pass
 
@@ -5455,14 +5483,14 @@ try:
         )
         st.markdown(html_doc, unsafe_allow_html=True)
 
-        # EXPANDER CON EL DOCUMENTO PDF DE LA FACTURA PARA CONSULTAR INFORMACION PENDIENTE
+        # EXPANDER CON EL DOCUMENTO PDF DE LA FACTURA PARA CONSULTAR INFORMACION PENDIENTE (0 MB RAM / SIN FUGAS C++)
         with st.expander(f"\U0001f4c4 Ver PDF de la Factura ({fac_num} \u2014 {pags_badge}) para Consultar Informaci\u00f3n Pendiente", expanded=False):
             safe_k_exp = re.sub(r"\W", "_", f"{comp_s}_{fac_num}_{key_suffix}")
             nombre_dl_pdf = str(fac_sel.get("Soporte PDF Renombrado") or f"Factura_{fac_num}.pdf")
             if not nombre_dl_pdf.lower().endswith(".pdf"):
                 nombre_dl_pdf += ".pdf"
 
-            # Ficha rapida de datos adicionales del PDF para consulta inmediata (0 MB RAM)
+            # Ficha rapida de datos adicionales del PDF para consulta inmediata
             st.markdown(
                 f"<div style='background:#eff6ff; border:1px solid #93c5fd; border-left:4px solid #0284c7; border-radius:6px; padding:10px 14px; margin-bottom:12px; font-size:12.8px; color:#1e3a8a;'>"
                 f"<b>\U0001f4cc Datos Adicionales de Consulta en el PDF ({fac_num}):</b><br>"
@@ -5475,83 +5503,44 @@ try:
                 unsafe_allow_html=True
             )
 
-            pdf_bytes_doc = pdf_bytes_original
-            es_pdf_sintetizado = False
-            if not key_suffix.startswith("pq_") or st.checkbox(f"\U0001f50d Mostrar PDF DIAN ({fac_num})", value=False, key=f"chk_lazy_pdf_dian_{safe_k_exp}"):
-                if not pdf_bytes_doc:
-                    try:
-                        _d_ren_lazy = st.session_state.get("dict_pdfs") or DiskBackedPDFDict("renom_pdfs")
-                        _d_ori_lazy = st.session_state.get("raw_uploaded_pdfs") or DiskBackedPDFDict("raw_pdfs")
-                        pdf_bytes_doc, _, _ = buscar_y_extraer_pdf(fac_sel, dict_renombrados=_d_ren_lazy, dict_originales=_d_ori_lazy, empresa_compradora=empresa_dict)
-                    except Exception:
-                        pdf_bytes_doc = None
-                if not pdf_bytes_doc:
-                    try:
-                        pdf_bytes_doc = generar_pdf_factura_dian_bytes(fac_sel, paginas_txt or [], empresa_dict)
-                        es_pdf_sintetizado = True
-                    except Exception:
-                        pdf_bytes_doc = b""
-                if pdf_bytes_doc:
-                    renderizar_visor_pdf_completo(
-                        pdf_bytes_doc,
-                        nombre_archivo=nombre_dl_pdf,
-                        fac_sel=fac_sel,
-                        key_prefix=f"exp_pdf_{safe_k_exp}",
-                        nit_comprador=re.sub(r"\D", "", str(empresa_dict.get("nit", "9013464125"))),
-                        mostrar_card_dian=False
+            # Boton bajo demanda para descargar el archivo .pdf o ver imagen escaneada si se subio un PDF externo
+            c_pdf_opt1, c_pdf_opt2 = st.columns([1.8, 2.2])
+            with c_pdf_opt1:
+                if st.checkbox(f"\U0001f4e5 Habilitar descarga de archivo PDF ({fac_num})", value=False, key=f"chk_lazy_pdf_dian_{key_suffix}"):
+                    _pdf_b_dl = pdf_bytes_original or generar_pdf_factura_dian_bytes(fac_sel, paginas_txt or [], empresa_dict)
+                    st.download_button(
+                        label=f"\u2b07\ufe0f Guardar {nombre_dl_pdf}",
+                        data=_pdf_b_dl,
+                        file_name=nombre_dl_pdf,
+                        mime="application/pdf",
+                        key=f"btn_dl_pdf_unico_{key_suffix}",
+                        use_container_width=True
                     )
 
-            # Hojas visuales A4 completas solo como respaldo si no existiera el PDF oficial DIAN
-            if es_pdf_sintetizado and pags_est:
-                st.markdown("#### \U0001f4d1 Vista Detallada Hoja por Hoja del Documento PDF (Todos los Campos y Notas)")
+            # Hojas visuales A4 completas en formato Oficial DIAN Verde/Blanco (100% HTML vectorial, 0 MB de RAM C++)
+            if pags_est:
                 for idx_pg, lines_pg in enumerate(pags_est):
                     filas_pg_html = ""
                     for ln_s in lines_pg:
                         if ":" in ln_s and not ln_s.startswith("http"):
                             p_k, p_v = ln_s.split(":", 1)
-                            filas_pg_html += f"<div style='padding:3px 0; border-bottom:1px dashed #e2e8f0;'><b style='color:#0f172a;'>{p_k}:</b> <span style='color:#1e293b;'>{p_v}</span></div>"
+                            filas_pg_html += f"<div style='padding:3px 0; border-bottom:1px dashed #e2e8f0;'><b style='color:#001028;'>{p_k}:</b> <span style='color:#1e293b;'>{p_v}</span></div>"
                         elif any(h_w in ln_s for h_w in ["FACTURA ELECTR", "Datos del ", "Detalles de Productos", "Notas Finales", "Datos Totales", "Valores informativos"]):
-                            filas_pg_html += f"<div style='background:#e0f2fe; color:#0369a1; font-weight:700; padding:5px 8px; border-radius:4px; margin-top:8px; margin-bottom:4px;'>{ln_s}</div>"
+                            filas_pg_html += f"<div style='background:#99ffcc; color:#001028; font-weight:700; padding:5px 10px; border-top:3px solid #41d78c; margin-top:10px; margin-bottom:4px;'>{ln_s}</div>"
                         else:
                             filas_pg_html += f"<div style='padding:2px 0; color:#334155;'>{ln_s}</div>"
 
                     st.markdown(
                         f"<div style='background:#525659; padding:14px; border-radius:8px; margin-bottom:14px;'>"
                         f"<div style='background:#ffffff; max-width:820px; margin:0 auto; padding:22px 28px; border-radius:4px; box-shadow:0 4px 14px rgba(0,0,0,0.25); font-family:-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; font-size:12.5px; line-height:1.45;'>"
-                        f"<div style='border-bottom:2px solid #0070ba; padding-bottom:8px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;'>"
-                        f"<span style='font-weight:800; color:#0070ba; font-size:14px;'>\U0001f4c4 DOCUMENTO PDF FACTURA {fac_num} \u2014 {prov_nom}</span>"
-                        f"<span style='background:#0070ba; color:white; padding:2px 10px; border-radius:12px; font-size:11.5px; font-weight:700;'>Hoja {idx_pg + 1} de {len(pags_est)}</span>"
+                        f"<div style='border-top:5px solid #41d78c; border-bottom:2px solid #41d78c; background:#f8fafc; padding:10px 14px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;'>"
+                        f"<div><b style='color:#001028; font-size:15px;'>DIAN &mdash; Factura Electr\u00f3nica de Venta {fac_num}</b><br><span style='font-size:11.5px; color:#475569;'>Emisor: {prov_nom} (NIT: {nit_em})</span></div>"
+                        f"<span style='background:#001028; color:#41d78c; padding:3px 12px; border-radius:12px; font-size:11.5px; font-weight:700;'>P\u00e1gina {idx_pg + 1} de {len(pags_est)}</span>"
                         f"</div>"
                         f"{filas_pg_html}"
                         f"</div></div>",
                         unsafe_allow_html=True
                     )
-
-            if es_pdf_sintetizado and not key_suffix.startswith("pq_"):
-                st.markdown("---")
-                c_up_e1, c_up_e2 = st.columns([2.2, 1.8])
-                with c_up_e2:
-                    solo_pdfs_exp = st.checkbox(
-                        "\U0001f512 Conservar mis cambios contables actuales",
-                        value=True,
-                        key=f"chk_solo_pdfs_exp_{safe_k_exp}"
-                    )
-                with c_up_e1:
-                    upl_exp = st.file_uploader(
-                        "\U0001f4e4 Opcional: Subir respaldo (.indumaq / .zip) si deseas cargar los 224 PDFs escaneados:",
-                        type=["indumaq", "zip", "pdf"],
-                        key=f"upl_pdfs_exp_{safe_k_exp}_{st.session_state.get('_upl_reset_cnt', 0)}"
-                    )
-                    if upl_exp is not None:
-                        with st.spinner("Extrayendo los 224 PDFs al disco local (0 MB RAM)..."):
-                            dict_r_tmp = st.session_state.get("dict_pdfs") or DiskBackedPDFDict("renom_pdfs")
-                            if upl_exp.name.lower().endswith(".pdf"):
-                                dict_r_tmp[upl_exp.name] = upl_exp.getvalue()
-                                st.session_state["dict_pdfs"] = dict_r_tmp
-                                st.rerun()
-                            elif restaurar_desde_respaldo_bytes(empresa_dict, upl_exp, solo_pdfs=solo_pdfs_exp):
-                                st.success("\u2705 \u00a1224 PDFs originales vinculados con \u00e9xito!")
-                                st.rerun()
 
 
     def cargar_respaldo_integrado_50_paquetes(empresa_dict=None):
@@ -6270,9 +6259,196 @@ try:
                 # Auditoria de regimen fiscal disponible bajo demanda mediante el boton superior
                 st.session_state["df_procesado"] = df_proc
     
-                cols_mostrar_proc = ["Comprobante Siigo", "Fecha", "Factura", "Proveedor", "NIT Emisor", "R\u00e9gimen Fiscal Emisor", "Estado Registro", "Cuenta Pasivo (CxP)", "Base", "IVA", "ReteFuente", "ReteICA", "Neto a Pagar", "Soporte PDF Renombrado"]
-                cols_mostrar_existentes = [c for c in cols_mostrar_proc if c in df_proc.columns]
-                st.dataframe(_df_para_streamlit(df_proc[cols_mostrar_existentes]), use_container_width=True)
+                # =========================================================================
+                # CUADRO INTERACTIVO EN HOJA 1: SELECCION SI/NO CONTABILIZAR + TIPO DOC + CONSECUTIVO
+                # =========================================================================
+                st.markdown("#### \U0001f4cb Cuadro Maestro de Control: Selecci\u00f3n de Facturas a Contabilizar, Tipo de Documento y Consecutivo")
+                st.caption("Marca con un clic cu\u00e1les facturas **S\u00cd se contabilizan** y cu\u00e1les **NO**, y asigna el **Tipo de Documento** y **Consecutivo** exacto que necesitas para Siigo (en bloque o fila por fila):")
+
+                if "facturas_no_contabilizar" not in st.session_state:
+                    st.session_state["facturas_no_contabilizar"] = set(df_proc[df_proc["No Contabilizar"] == True]["Factura"].dropna().astype(str).str.strip().tolist())
+                _set_no_cont_h1 = st.session_state["facturas_no_contabilizar"]
+
+                # Sincronizar columna booleana 'Contabilizar' (True = SI contabilizar, False = NO contabilizar)
+                df_proc["No Contabilizar"] = df_proc["Factura"].astype(str).str.strip().isin(_set_no_cont_h1) | (df_proc["No Contabilizar"] == True)
+                df_proc["Contabilizar"] = ~df_proc["No Contabilizar"]
+                df_proc["Consecutivo"] = pd.to_numeric(df_proc["Consecutivo"], errors="coerce").fillna(680).astype(int)
+                df_proc["Tipo Comp"] = df_proc["Tipo Comp"].fillna("10").astype(str).str.strip()
+
+                n_si_h1 = int(df_proc["Contabilizar"].sum())
+                n_no_h1 = int((~df_proc["Contabilizar"]).sum())
+
+                # Barra superior de acciones rapidas sobre el cuadro
+                with st.expander("\u2699\ufe0f Herramienta R\u00e1pida: Asignar Tipo de Documento y Numerar Consecutivos en Bloque", expanded=True):
+                    c_blk1, c_blk2, c_blk3, c_blk4 = st.columns([1.5, 1.1, 1.3, 1.5])
+                    with c_blk1:
+                        _opc_tdoc = ["10 - Compra / RP Oficial", "11 - Gastos / Doc Equivalente", "20 - Nota Cr\u00e9dito", "FC - Factura de Compra", "RP - Registro Proveedor", "CC - Comprobante Contable", "Otro (Escribir c\u00f3digo)"]
+                        _sel_tdoc_blk = st.selectbox("Tipo de Documento Siigo:", _opc_tdoc, index=0, key="sel_tdoc_masivo_h1")
+                        if "Otro" in _sel_tdoc_blk:
+                            _cod_tdoc_blk = st.text_input("Escribe el C\u00f3digo de Tipo de Doc:", value="10", key="txt_tdoc_custom_h1").strip() or "10"
+                        else:
+                            _cod_tdoc_blk = _sel_tdoc_blk.split(" - ")[0].strip()
+                    with c_blk2:
+                        _cons_ini_blk = int(st.number_input("Consecutivo Inicial:", min_value=1, max_value=9999999, value=int(st.session_state.get("consecutivo_actual", 680)), step=1, key="num_cons_ini_masivo_h1"))
+                    with c_blk3:
+                        _alcance_blk = st.radio(
+                            "Aplicar numeraci\u00f3n a:",
+                            [f"Solo S\u00cd Contabilizar ({n_si_h1})", f"Todas las filas ({len(df_proc)})"],
+                            key="rad_alcance_num_h1"
+                        )
+                    with c_blk4:
+                        st.write("")
+                        if st.button("\U0001f522 Aplicar Tipo Doc y Consecutivos", key="btn_aplicar_num_masivo_h1", type="primary", use_container_width=True, help="Asigna el Tipo de Documento elegido y numera en orden secuencial desde el Consecutivo Inicial"):
+                            _curr_c = _cons_ini_blk
+                            _old_to_new_comp = {}
+                            for _i_r, _r_r in df_proc.iterrows():
+                                if "Solo S" in _alcance_blk and not bool(_r_r["Contabilizar"]):
+                                    continue
+                                _old_c_str = str(_r_r.get("Comprobante Siigo", "")).strip()
+                                df_proc.at[_i_r, "Tipo Comp"] = _cod_tdoc_blk
+                                df_proc.at[_i_r, "Consecutivo"] = _curr_c
+                                _new_c_str = f"Comp {_cod_tdoc_blk}-{_curr_c}"
+                                df_proc.at[_i_r, "Comprobante Siigo"] = _new_c_str
+                                _old_to_new_comp[_old_c_str] = _new_c_str
+                                _f_cl = re.sub(r'[^a-zA-Z0-9]', '', str(_r_r.get("Factura", "")))
+                                _p_cl = re.sub(r'[^a-zA-Z0-9]', '', str(_r_r.get("Proveedor", "Prov")))[:15]
+                                df_proc.at[_i_r, "Soporte PDF Renombrado"] = f"Comp_{_cod_tdoc_blk}-{_curr_c}_{_f_cl}_{_p_cl}.pdf"
+                                _curr_c += 1
+                            st.session_state["df_procesado"] = df_proc
+                            st.session_state.pop("_siigo_cache_sig", None)
+                            st.session_state.pop("_cached_respaldo_bytes", None)
+                            st.session_state["_h1_editor_ver"] = st.session_state.get("_h1_editor_ver", 0) + 1
+                            guardar_estado_manual(empresa)
+                            st.success(f"\u2705 Se aplic\u00f3 el Tipo de Documento '{_cod_tdoc_blk}' y consecutivos desde {_cons_ini_blk} hasta {_curr_c - 1}.")
+                            st.rerun()
+
+                    c_sel_b1, c_sel_b2, c_sel_b3 = st.columns(3)
+                    with c_sel_b1:
+                        if st.button("\u2705 Marcar TODAS como S\u00cd Contabilizar", key="btn_all_si_h1", use_container_width=True):
+                            df_proc["Contabilizar"] = True
+                            df_proc["No Contabilizar"] = False
+                            st.session_state["facturas_no_contabilizar"] = set()
+                            for _i_r, _r_r in df_proc.iterrows():
+                                _es_r = bool(_r_r.get("Ya Registrada", False))
+                                _cp = str(_r_r.get("Comprobante Previo", "")).strip()
+                                df_proc.at[_i_r, "Estado Registro"] = f"\U0001f534 Ya Registrada ({_cp})" if _es_r else "\u26aa Compra Pendiente"
+                            st.session_state["df_procesado"] = df_proc
+                            st.session_state.pop("_siigo_cache_sig", None)
+                            st.session_state["_h1_editor_ver"] = st.session_state.get("_h1_editor_ver", 0) + 1
+                            guardar_estado_manual(empresa)
+                            st.rerun()
+                    with c_sel_b2:
+                        if st.button("\U0001f6ab Marcar 'Ya Registradas (Rojas)' como NO Contabilizar", key="btn_rojas_no_h1", use_container_width=True):
+                            _nuevas_no = set()
+                            for _i_r, _r_r in df_proc.iterrows():
+                                _es_r = bool(_r_r.get("Ya Registrada", False))
+                                if _es_r:
+                                    df_proc.at[_i_r, "Contabilizar"] = False
+                                    df_proc.at[_i_r, "No Contabilizar"] = True
+                                    df_proc.at[_i_r, "Estado Registro"] = "\U0001f6ab No Contabilizar (Excluida)"
+                                    _nuevas_no.add(str(_r_r.get("Factura", "")).strip())
+                                else:
+                                    df_proc.at[_i_r, "Contabilizar"] = True
+                                    df_proc.at[_i_r, "No Contabilizar"] = False
+                                    df_proc.at[_i_r, "Estado Registro"] = "\u26aa Compra Pendiente"
+                            st.session_state["facturas_no_contabilizar"] = _nuevas_no
+                            st.session_state["df_procesado"] = df_proc
+                            st.session_state.pop("_siigo_cache_sig", None)
+                            st.session_state["_h1_editor_ver"] = st.session_state.get("_h1_editor_ver", 0) + 1
+                            guardar_estado_manual(empresa)
+                            st.rerun()
+                    with c_sel_b3:
+                        st.info(f"\U0001f4ca **Resumen Actual:** **{n_si_h1}** S\u00cd se contabilizan | **{n_no_h1}** NO se contabilizan")
+
+                # Tabla interactiva fila por fila con st.data_editor
+                cols_editor_h1 = ["Contabilizar", "Tipo Comp", "Consecutivo", "Comprobante Siigo", "Fecha", "Factura", "Proveedor", "NIT Emisor", "R\u00e9gimen Fiscal Emisor", "Estado Registro", "Cta Principal", "Base", "IVA", "ReteFuente", "ReteICA", "Neto a Pagar", "Soporte PDF Renombrado"]
+                cols_editor_existentes = [c for c in cols_editor_h1 if c in df_proc.columns]
+                df_para_editor_h1 = _limpiar_dtypes_pyarrow_df(df_proc[cols_editor_existentes].copy())
+                df_para_editor_h1["Contabilizar"] = df_para_editor_h1["Contabilizar"].astype(bool)
+                df_para_editor_h1["Tipo Comp"] = df_para_editor_h1["Tipo Comp"].astype(str)
+                df_para_editor_h1["Consecutivo"] = pd.to_numeric(df_para_editor_h1["Consecutivo"], errors="coerce").fillna(680).astype(int)
+
+                cols_bloqueadas_h1 = [c for c in cols_editor_existentes if c not in ("Contabilizar", "Tipo Comp", "Consecutivo")]
+                try:
+                    df_editado_h1 = st.data_editor(
+                        df_para_editor_h1,
+                        column_config={
+                            "Contabilizar": st.column_config.CheckboxColumn(
+                                "\u2705 Contabilizar (S\u00ed/No)",
+                                help="Marca la casilla si la factura S\u00cd se contabiliza. Desm\u00e1rcala si NO se debe contabilizar.",
+                                default=True
+                            ),
+                            "Tipo Comp": st.column_config.TextColumn(
+                                "\U0001f4c4 Tipo Doc",
+                                help="C\u00f3digo de Tipo de Documento o Comprobante para Siigo (ej. 10, 11, 20, FC, RP, CC)"
+                            ),
+                            "Consecutivo": st.column_config.NumberColumn(
+                                "\U0001f522 Consecutivo",
+                                help="N\u00famero consecutivo del documento en Siigo",
+                                step=1,
+                                format="%d"
+                            ),
+                            "Comprobante Siigo": st.column_config.TextColumn("Comprobante Siigo"),
+                            "Base": st.column_config.NumberColumn("Base ($)", format="$%.2f"),
+                            "IVA": st.column_config.NumberColumn("IVA ($)", format="$%.2f"),
+                            "ReteFuente": st.column_config.NumberColumn("ReteFuente ($)", format="$%.2f"),
+                            "ReteICA": st.column_config.NumberColumn("ReteICA ($)", format="$%.2f"),
+                            "Neto a Pagar": st.column_config.NumberColumn("Neto a Pagar ($)", format="$%.2f"),
+                        },
+                        disabled=cols_bloqueadas_h1,
+                        use_container_width=True,
+                        hide_index=True,
+                        num_rows="fixed",
+                        key=f"editor_cuadro_hoja1_v{st.session_state.get('_h1_editor_ver', 0)}"
+                    )
+                except Exception:
+                    df_editado_h1 = df_para_editor_h1
+                    st.dataframe(_df_para_streamlit(df_para_editor_h1), use_container_width=True)
+
+                # Detectar y guardar cambios realizados directamente en el cuadro de la Hoja 1
+                _hubo_cambio_cuadro_h1 = (
+                    not df_editado_h1["Contabilizar"].astype(bool).equals(df_para_editor_h1["Contabilizar"].astype(bool))
+                    or not df_editado_h1["Tipo Comp"].astype(str).str.strip().equals(df_para_editor_h1["Tipo Comp"].astype(str).str.strip())
+                    or not pd.to_numeric(df_editado_h1["Consecutivo"], errors="coerce").fillna(0).astype(int).equals(df_para_editor_h1["Consecutivo"].astype(int))
+                )
+                c_save_h1_1, c_save_h1_2 = st.columns([2.2, 1.8])
+                with c_save_h1_1:
+                    if st.button("\U0001f4be Guardar Cambios del Cuadro (Selecci\u00f3n S\u00ed/No, Tipo Doc y Consecutivo) y Actualizar Hojas 2, 3 y 4", type="primary", use_container_width=True, key="btn_save_cuadro_h1") or _hubo_cambio_cuadro_h1:
+                        _nuevas_excl_h1 = set()
+                        for _idx_e in df_editado_h1.index:
+                            _si_cont = bool(df_editado_h1.at[_idx_e, "Contabilizar"])
+                            _td_new = str(df_editado_h1.at[_idx_e, "Tipo Comp"]).strip() or "10"
+                            try:
+                                _cs_new = int(float(df_editado_h1.at[_idx_e, "Consecutivo"] or 680))
+                            except Exception:
+                                _cs_new = 680
+                            _fn_row = str(df_proc.at[_idx_e, "Factura"]).strip()
+                            df_proc.at[_idx_e, "Contabilizar"] = _si_cont
+                            df_proc.at[_idx_e, "No Contabilizar"] = (not _si_cont)
+                            df_proc.at[_idx_e, "Tipo Comp"] = _td_new
+                            df_proc.at[_idx_e, "Consecutivo"] = _cs_new
+                            df_proc.at[_idx_e, "Comprobante Siigo"] = f"Comp {_td_new}-{_cs_new}"
+                            _f_cl = re.sub(r'[^a-zA-Z0-9]', '', _fn_row)
+                            _p_cl = re.sub(r'[^a-zA-Z0-9]', '', str(df_proc.at[_idx_e, "Proveedor"]))[:15]
+                            df_proc.at[_idx_e, "Soporte PDF Renombrado"] = f"Comp_{_td_new}-{_cs_new}_{_f_cl}_{_p_cl}.pdf"
+                            if not _si_cont:
+                                _nuevas_excl_h1.add(_fn_row)
+                                df_proc.at[_idx_e, "Estado Registro"] = "\U0001f6ab No Contabilizar (Excluida)"
+                            else:
+                                if "No Contabilizar" in str(df_proc.at[_idx_e, "Estado Registro"]):
+                                    _es_r = bool(df_proc.at[_idx_e, "Ya Registrada"])
+                                    _cp = str(df_proc.at[_idx_e, "Comprobante Previo"]).strip()
+                                    df_proc.at[_idx_e, "Estado Registro"] = f"\U0001f534 Ya Registrada ({_cp})" if _es_r else "\u26aa Compra Pendiente"
+                        st.session_state["facturas_no_contabilizar"] = _nuevas_excl_h1
+                        st.session_state["df_procesado"] = df_proc
+                        st.session_state.pop("_siigo_cache_sig", None)
+                        st.session_state.pop("_cached_respaldo_bytes", None)
+                        guardar_estado_manual(empresa)
+                        st.success(f"\u2705 Cuadro actualizado: {int(df_proc['Contabilizar'].sum())} facturas activas pasan con su Tipo de Documento y Consecutivo a las Hojas 2, 3 y 4.")
+                        if _hubo_cambio_cuadro_h1:
+                            st.rerun()
+                with c_save_h1_2:
+                    st.caption("\U0001f4a1 Cualquier casilla que marques o consecutivo que cambies en la tabla se sincroniza autom\u00e1ticamente con Auditor\u00eda (Hoja 2) y Siigo (Hoja 4).")
     
                 st.markdown("---")
                 st.markdown("#### \U0001f4d1 Procesamiento, Separaci\u00f3n y Renombrado de PDFs Multi-P\u00e1gina:")
@@ -6703,35 +6879,51 @@ try:
                         st.success(f"\u00a1Se han marcado {len(nuevas_ex)} facturas como NO contabilizables!")
                         st.rerun()
     
-                # BARRA DE ACELERACION DE AUDITORIA: FILTROS Y NAVEGACION 1-CLIC
+                # BARRA DE ACELERACION DE AUDITORIA: FILTROS Y APROBACION PARA HOJA 3 Y 4
                 n_tot_f = len(df_p)
                 mask_excl_f = df_p["Factura"].astype(str).str.strip().isin(cur_no_contab) | (df_p["No Contabilizar"] == True)
-                mask_edit_f = (df_p["Editada Manualmente"] == True) & (~mask_excl_f)
-                mask_pend_f = (~mask_excl_f) & (~mask_edit_f)
+                mask_contab_si = ~mask_excl_f
+                mask_edit_f = ((df_p["Editada Manualmente"] == True) | (df_p.get("Aprobada Hoja 2", False) == True)) & mask_contab_si
+                mask_pend_f = mask_contab_si & (~mask_edit_f)
+                n_si_cont_f = int(mask_contab_si.sum())
                 n_pend_f = int(mask_pend_f.sum())
                 n_edit_f = int(mask_edit_f.sum())
                 n_excl_f = int(mask_excl_f.sum())
 
-                c_fbar1, c_fbar2 = st.columns([2.8, 1.4])
+                c_fbar1, c_fbar2, c_fbar3 = st.columns([2.7, 1.1, 1.1])
                 with c_fbar1:
                     filtro_aud_modo = st.radio(
-                        "\U0001f680 Filtro Rapido de Revision:",
+                        "\U0001f680 Filtro de Revisi\u00f3n y Aprobaci\u00f3n (Hoja 2):",
                         [
-                            f"\U0001f4cb Todas ({n_tot_f})",
-                            f"\u23f3 Pendientes por Revisar ({n_pend_f})",
-                            f"\u270f\ufe0f Revisadas / Editadas ({n_edit_f})",
-                            f"\U0001f6ab No Contabilizar ({n_excl_f})"
+                            f"\u2705 S\u00cd Contabilizar ({n_si_cont_f})",
+                            f"\u23f3 Pendientes por Aprobar ({n_pend_f})",
+                            f"\U0001f44d Aprobadas / Editadas ({n_edit_f})",
+                            f"\U0001f6ab No Contabilizar ({n_excl_f})",
+                            f"\U0001f4cb Todas ({n_tot_f})"
                         ],
+                        index=0,
                         horizontal=True,
                         key="rad_filtro_rapido_hoja2"
                     )
                 with c_fbar2:
-                    progreso_pct = round(((n_edit_f + n_excl_f) / max(1, n_tot_f)) * 100, 1)
-                    st.progress(min(1.0, (n_edit_f + n_excl_f) / max(1, n_tot_f)), text=f"Avance Revision: {n_edit_f + n_excl_f}/{n_tot_f} ({progreso_pct}%)")
+                    progreso_pct = round((n_edit_f / max(1, n_si_cont_f)) * 100, 1)
+                    st.progress(min(1.0, n_edit_f / max(1, n_si_cont_f)), text=f"Aprobadas: {n_edit_f}/{n_si_cont_f} ({progreso_pct}%)")
+                with c_fbar3:
+                    if st.button("\u2705 Aprobar Todas las Contabilizables", key="btn_aprobar_todas_h2", use_container_width=True, help="Aprueba todas las facturas marcadas como S\u00cd Contabilizar para pasarlas listas a las Hojas 3 y 4"):
+                        for _i_ap in df_p[mask_contab_si].index:
+                            df_p.at[_i_ap, "Editada Manualmente"] = True
+                            df_p.at[_i_ap, "Aprobada Hoja 2"] = True
+                        st.session_state["df_procesado"] = df_p
+                        st.session_state.pop("_siigo_cache_sig", None)
+                        guardar_estado_manual(empresa)
+                        st.success(f"\u2705 \u00a1{n_si_cont_f} facturas aprobadas y listas en Hoja 3 y Hoja 4!")
+                        st.rerun()
 
-                if "Pendientes" in filtro_aud_modo and n_pend_f > 0:
+                if "S\u00cd Contabilizar" in filtro_aud_modo and n_si_cont_f > 0:
+                    df_p_vista = df_p[mask_contab_si]
+                elif "Pendientes" in filtro_aud_modo and n_pend_f > 0:
                     df_p_vista = df_p[mask_pend_f]
-                elif "Revisadas" in filtro_aud_modo and n_edit_f > 0:
+                elif "Aprobadas" in filtro_aud_modo and n_edit_f > 0:
                     df_p_vista = df_p[mask_edit_f]
                 elif "No Contabilizar" in filtro_aud_modo and n_excl_f > 0:
                     df_p_vista = df_p[mask_excl_f]
@@ -7390,21 +7582,42 @@ try:
                                 st.session_state["_forzar_salto_comp_h2"] = comp_sel
                             return n_replicadas
 
-                        # BOTONES DE ACCION RAPIDA PARA QUE RINDA LA REVISION
-                        cb_act1, cb_act2, cb_act3 = st.columns([1.3, 1.5, 1.5])
+                        # Campos rapidos para ajustar Tipo de Documento y Consecutivo en esta factura desde Hoja 2
+                        c_td_h2_1, c_td_h2_2 = st.columns(2)
+                        with c_td_h2_1:
+                            nuevo_tdoc_h2 = st.text_input("\U0001f4c4 Tipo de Documento Siigo:", value=str(fac_sel.get("Tipo Comp", "10")).strip(), key=f"txt_tdoc_h2_{comp_box_id}")
+                        with c_td_h2_2:
+                            nuevo_cons_h2 = int(st.number_input("\U0001f522 Consecutivo Siigo:", min_value=1, max_value=9999999, value=int(float(fac_sel.get("Consecutivo", 680) or 680)), step=1, key=f"num_cons_h2_{comp_box_id}"))
+
+                        def _aplicar_tdoc_y_aprobar_h2(r_idx_target):
+                            _td_c = nuevo_tdoc_h2.strip() or "10"
+                            df_p.at[r_idx_target, "Tipo Comp"] = _td_c
+                            df_p.at[r_idx_target, "Consecutivo"] = nuevo_cons_h2
+                            df_p.at[r_idx_target, "Comprobante Siigo"] = f"Comp {_td_c}-{nuevo_cons_h2}"
+                            df_p.at[r_idx_target, "Aprobada Hoja 2"] = True
+                            _f_cl = re.sub(r'[^a-zA-Z0-9]', '', str(df_p.at[r_idx_target, "Factura"]))
+                            _p_cl = re.sub(r'[^a-zA-Z0-9]', '', str(df_p.at[r_idx_target, "Proveedor"]))[:15]
+                            df_p.at[r_idx_target, "Soporte PDF Renombrado"] = f"Comp_{_td_c}-{nuevo_cons_h2}_{_f_cl}_{_p_cl}.pdf"
+                            return f"Comp {_td_c}-{nuevo_cons_h2}"
+
+                        # BOTONES DE ACCION RAPIDA PARA APROBAR Y PASAR A HOJA 3 Y 4
+                        cb_act1, cb_act2, cb_act3 = st.columns([1.4, 1.6, 1.4])
                         with cb_act1:
-                            if st.button("\U0001f4be Guardar y Recalcular", key=f"btn_aplica_reg_{comp_box_id}", type="primary", use_container_width=True):
+                            if st.button("\u2705 Aprobar y Guardar Contabilizaci\u00f3n", key=f"btn_aplica_reg_{comp_box_id}", type="primary", use_container_width=True):
+                                _aplicar_tdoc_y_aprobar_h2(fac_sel.name)
                                 _guardar_cambios_factura_actual(avanzar_siguiente=False, aplicar_a_todo_proveedor=False)
-                                st.success("\u00a1Factura actualizada y asiento recalculado!")
+                                st.success("\u2705 \u00a1Contabilizaci\u00f3n aprobada y actualizada para Hoja 3 y Hoja 4!")
                                 st.rerun()
                         with cb_act2:
-                            if st.button("\U0001f4be\u27a1\ufe0f Guardar y Pasar a Siguiente", key=f"btn_aplica_next_{comp_box_id}", use_container_width=True, help="Guarda esta factura y abre de inmediato la siguiente para que avances sin subir al buscador"):
+                            if st.button("\u2705\u27a1\ufe0f Aprobar y Pasar a Siguiente", key=f"btn_aplica_next_{comp_box_id}", use_container_width=True, help="Aprueba esta factura, la pasa a Hoja 3/4 y abre de inmediato la siguiente factura"):
+                                _aplicar_tdoc_y_aprobar_h2(fac_sel.name)
                                 _guardar_cambios_factura_actual(avanzar_siguiente=True, aplicar_a_todo_proveedor=False)
                                 st.rerun()
                         with cb_act3:
-                            if st.button("\U0001f504 Aplicar Cuentas a todo este Proveedor", key=f"btn_aplica_prov_{comp_box_id}", use_container_width=True, help="Aplica estas mismas cuentas y porcentajes de retencion a todas las facturas activas de este mismo proveedor"):
+                            if st.button("\U0001f504 Aprobar y Aplicar a todo el Proveedor", key=f"btn_aplica_prov_{comp_box_id}", use_container_width=True, help="Aplica estas mismas cuentas y porcentajes de retencion a todas las facturas activas de este mismo proveedor"):
+                                _aplicar_tdoc_y_aprobar_h2(fac_sel.name)
                                 n_rep = _guardar_cambios_factura_actual(avanzar_siguiente=False, aplicar_a_todo_proveedor=True)
-                                st.success(f"\u00a1Cuentas y formulas aplicadas a esta factura y a otras {n_rep} facturas de {fac_sel.get('Proveedor', '')}!")
+                                st.success(f"\u2705 \u00a1Cuentas aprobadas y aplicadas a esta factura y a otras {n_rep} facturas de {fac_sel.get('Proveedor', '')}!")
                                 st.rerun()
 
                     if es_aduanero:
@@ -9024,7 +9237,7 @@ try:
                                 "Cuenta Contable": str(tr_lib.get("Cuenta Pasivo Especifica", "22050505"))
                             })
     
-                        if todos_asientos_lista:
+                        if todos_asientos_lista and st.checkbox("\U0001f4e5 Preparar Descarga de Control de Cruces de Importaci\u00f3n en Excel (50 Paquetes)", value=False, key="chk_prep_excel_cruces_tab3"):
                             df_export_cruces = pd.DataFrame(todos_asientos_lista)
                             buf_cruce_ex = io.BytesIO()
                             with pd.ExcelWriter(buf_cruce_ex, engine="openpyxl") as wr_cr:
